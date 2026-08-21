@@ -1,0 +1,130 @@
+name: Temporary BaseModel WebKit Production Acceptance
+
+on:
+  push:
+    branches:
+      - temp/basemodel-webkit-prod-6fabf9e-20260821
+
+jobs:
+  webkit-production:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install Playwright WebKit
+        run: |
+          mkdir -p /tmp/basemodel-webkit
+          cd /tmp/basemodel-webkit
+          npm init -y
+          npm install @playwright/test@1.62.1
+          npx playwright install --with-deps webkit
+      - name: Run production acceptance
+        working-directory: /tmp/basemodel-webkit
+        env:
+          BASE_URL: https://basemodel-preview.vercel.app
+          EXPECTED_BASEMODEL_SHA: 6fabf9e1e8481ac60f4a55d1cf6cb7b0c17358d0
+        run: |
+          node <<'NODE'
+          const { webkit } = require('@playwright/test');
+
+          (async () => {
+            const baseURL = process.env.BASE_URL;
+            const browser = await webkit.launch();
+            const routes = [
+              '/',
+              '/en/',
+              '/models/',
+              '/en/models/',
+              '/landscape/',
+              '/research/seed-openevo/results/',
+              '/en/research/seed-openevo/results/',
+              '/guide/openevo-webshop-alfworld/',
+            ];
+            const viewports = [
+              { name: 'mobile', width: 390, height: 844 },
+              { name: 'tablet', width: 768, height: 1024 },
+              { name: 'desktop', width: 1440, height: 1000 },
+            ];
+            const themes = ['light', 'dark'];
+            let checks = 0;
+
+            for (const viewport of viewports) {
+              for (const theme of themes) {
+                const context = await browser.newContext({ viewport });
+                await context.addInitScript((value) => localStorage.setItem('atlas-theme', value), theme);
+                for (const route of routes) {
+                  const page = await context.newPage();
+                  const errors = [];
+                  page.on('pageerror', error => errors.push(error.message));
+                  page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+                  const response = await page.goto(`${baseURL}${route}`, { waitUntil: 'domcontentloaded' });
+                  if (!response || response.status() >= 400) throw new Error(`${viewport.name}/${theme} ${route}: HTTP ${response?.status()}`);
+                  await page.waitForLoadState('networkidle');
+                  const headerVisible = await page.locator('[data-site-header]').isVisible();
+                  if (!headerVisible) throw new Error(`${viewport.name}/${theme} ${route}: header hidden`);
+                  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+                  if (overflow > 1) throw new Error(`${viewport.name}/${theme} ${route}: horizontal overflow ${overflow}px`);
+                  if (errors.length) throw new Error(`${viewport.name}/${theme} ${route}: ${errors.join(' | ')}`);
+                  checks += 1;
+                  await page.close();
+                }
+                await context.close();
+              }
+            }
+
+            {
+              const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
+              const page = await context.newPage();
+              await page.goto(`${baseURL}/`, { waitUntil: 'networkidle' });
+              const toggle = page.locator('[data-menu-toggle]');
+              await toggle.click();
+              if ((await toggle.getAttribute('aria-expanded')) !== 'true') throw new Error('mobile menu did not open');
+              if (!(await page.locator('[data-mobile-menu]').isVisible())) throw new Error('mobile menu not visible');
+              await page.keyboard.press('Escape');
+              if ((await toggle.getAttribute('aria-expanded')) !== 'false') throw new Error('mobile menu did not close with Escape');
+              await context.close();
+            }
+
+            {
+              const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+              const page = await context.newPage();
+              await page.goto(`${baseURL}/`, { waitUntil: 'networkidle' });
+              const resource = page.locator('[data-resource-menu]');
+              await resource.locator('summary').click();
+              if (!(await resource.getAttribute('open') !== null)) throw new Error('resource menu did not open');
+              const themeToggle = page.locator('[data-theme-toggle]').first();
+              await themeToggle.click();
+              if ((await page.locator('html').getAttribute('data-theme')) !== 'dark') throw new Error('theme did not switch dark');
+              await themeToggle.click();
+              if ((await page.locator('html').getAttribute('data-theme')) !== 'light') throw new Error('theme did not switch light');
+              await context.close();
+            }
+
+            {
+              const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+              await context.addInitScript(() => localStorage.setItem('atlas-compare', JSON.stringify(['qwen3-8b', 'gpt-oss-20b'])));
+              const page = await context.newPage();
+              const modelRequests = [];
+              const errors = [];
+              page.on('request', request => { if (request.url().includes('/model-data/')) modelRequests.push(request.url()); });
+              page.on('pageerror', error => errors.push(error.message));
+              page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+              await page.goto(`${baseURL}/`, { waitUntil: 'networkidle' });
+              const tray = page.locator('.compare-tray');
+              await tray.waitFor({ state: 'visible' });
+              const text = await tray.textContent();
+              if (!text.includes('Qwen3-8B') || !text.includes('gpt-oss-20b')) throw new Error(`compare labels unresolved: ${text}`);
+              if (modelRequests.length < 2) throw new Error(`expected on-demand model-data requests, got ${modelRequests.length}`);
+              if (errors.length) throw new Error(`compare tray errors: ${errors.join(' | ')}`);
+              await context.close();
+            }
+
+            console.log(`WEBKIT_PRODUCTION_PASS checks=${checks} sha=${process.env.EXPECTED_BASEMODEL_SHA}`);
+            await browser.close();
+          })().catch(error => {
+            console.error(error);
+            process.exit(1);
+          });
+          NODE
