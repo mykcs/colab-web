@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - tmp/basemodel-webkit-production-20260821
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: read
@@ -104,9 +107,6 @@ jobs:
                 await page.goto(`${baseURL}/`, { waitUntil: 'networkidle' });
                 const resource = page.locator('[data-resource-menu]');
                 await resource.locator('summary').click();
-                if (!(await resource.getAttribute('open')) !== false) {
-                  // attribute presence is checked below; keep branch explicit for old WebKit DOM behavior
-                }
                 if (await resource.getAttribute('open') === null) throw new Error('resource menu did not open');
                 await page.keyboard.press('Escape');
                 if (await resource.getAttribute('open') !== null) throw new Error('resource menu did not close');
