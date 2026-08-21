@@ -61,12 +61,18 @@ async function snapshot(page) {
 async function removeDesignRefinementHeaderRules(page) {
   return page.evaluate(() => {
     const normalizeMedia = (value = '') => value.replace(/\s+/g, '').toLowerCase();
-    const selectorIs = (selector, expected) => selector.replace(/\s+/g, ' ').trim() === expected;
-    const hasAllSelectors = (selector, names) => names.every((name) => selector.includes(name));
+    const normalizeSelector = (value = '') => value.replace(/\s+/g, '');
+    const selectorIs = (selector, expected) => normalizeSelector(selector) === normalizeSelector(expected);
+    const hasAllSelectors = (selector, names) => {
+      const normalized = normalizeSelector(selector);
+      return names.every((name) => normalized.includes(normalizeSelector(name)));
+    };
     const mediaMatches = (media, px) => normalizeMedia(media).includes(`${px}px`);
+    const isStyleRule = (rule) => typeof rule?.selectorText === 'string' && rule?.style;
+    const isGroupingRule = (rule) => rule?.cssRules && typeof rule.deleteRule === 'function';
 
     const matches = (rule, media) => {
-      if (!(rule instanceof CSSStyleRule)) return false;
+      if (!isStyleRule(rule)) return false;
       const s = rule.selectorText || '';
       const style = rule.style;
       const m = media || '';
@@ -100,25 +106,39 @@ async function removeDesignRefinementHeaderRules(page) {
       return false;
     };
 
+    const diagnostics = [];
     let removed = 0;
-    const walk = (rules, media = '') => {
+
+    const walk = (container, media = '') => {
+      const rules = container?.cssRules;
+      if (!rules) return;
       for (let index = rules.length - 1; index >= 0; index -= 1) {
         const rule = rules[index];
-        if (rule instanceof CSSMediaRule) {
-          walk(rule.cssRules, rule.conditionText || media);
+        const nestedMedia = rule?.conditionText || rule?.media?.mediaText || media;
+        if (isGroupingRule(rule)) {
+          walk(rule, nestedMedia);
           continue;
         }
+
+        if (isStyleRule(rule)) {
+          const selector = rule.selectorText || '';
+          if (/nav-inner|brand|menu-toggle|mobile-menu|command-search-trigger|desktop-nav|nav-primary|nav-secondary/.test(selector)) {
+            diagnostics.push({ selector, media, cssText: rule.style?.cssText || '' });
+          }
+        }
+
         if (matches(rule, media)) {
-          rules.deleteRule(index);
+          container.deleteRule(index);
           removed += 1;
         }
       }
     };
 
     for (const sheet of [...document.styleSheets]) {
-      try { walk(sheet.cssRules); } catch {}
+      try { walk(sheet); } catch {}
     }
-    return removed;
+
+    return { removed, diagnostics };
   });
 }
 
@@ -142,8 +162,11 @@ async function runBrowser(browserType, name) {
           }
 
           const before = await snapshot(page);
-          const removed = await removeDesignRefinementHeaderRules(page);
-          if (removed !== 14) throw new Error(`${name}/${route}: expected 14 design-refinement Header rules, removed ${removed}`);
+          const retirement = await removeDesignRefinementHeaderRules(page);
+          if (retirement.removed !== 14) {
+            console.error('CSSOM_DIAGNOSTICS', JSON.stringify(retirement.diagnostics, null, 2));
+            throw new Error(`${name}/${route}: expected 14 design-refinement Header rules, removed ${retirement.removed}`);
+          }
           await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
           const after = await snapshot(page);
 
