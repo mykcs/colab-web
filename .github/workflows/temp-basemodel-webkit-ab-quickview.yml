@@ -1,4 +1,4 @@
-name: Temporary BaseModel WebKit QuickView A-B Acceptance
+name: Temporary BaseModel WebKit QuickView Diagnostics
 
 on:
   push:
@@ -9,7 +9,7 @@ on:
       - main
 
 jobs:
-  webkit-ab:
+  webkit-diagnostics:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -23,109 +23,96 @@ jobs:
           npm init -y
           npm install @playwright/test@1.62.1
           npx playwright install --with-deps webkit
-      - name: Run surgical production A/B acceptance
+      - name: Diagnose island readiness on Production
         working-directory: /tmp/basemodel-webkit
         env:
           BASE_URL: https://basemodel-preview.vercel.app
           BASELINE_SHA: 68eeb09d0347dcb901a1f2d407314d67444fe443
-          HOTFIX_TREE: 00c0bd0ac71c4aff9d82387aa6b4144ec1d296e6
         run: |
           node <<'NODE'
           const { webkit } = require('@playwright/test');
 
           (async () => {
-            const baseURL = process.env.BASE_URL;
             const browser = await webkit.launch();
-            const patchPaths = new Set(['/families/', '/papers/agentbench/']);
+            const baseURL = process.env.BASE_URL;
 
-            const installHydrationPatch = async (page) => {
-              await page.route(`${baseURL}/**`, async route => {
-                const request = route.request();
-                const url = new URL(request.url());
-                if (request.resourceType() !== 'document' || !patchPaths.has(url.pathname)) {
-                  await route.continue();
-                  return;
-                }
-                const response = await route.fetch();
-                const body = await response.text();
-                const re = /(<astro-island\b(?=[^>]*\bcomponent-export="GlobalModelQuickView")[^>]*\b)client="idle"/;
-                if (!re.test(body)) throw new Error(`expected one idle GlobalModelQuickView island in ${url.pathname}`);
-                const patched = body.replace(re, '$1client="load"');
-                const remainingIdle = (patched.match(/<astro-island\b(?=[^>]*\bcomponent-export="GlobalModelQuickView")[^>]*\bclient="idle"/g) || []).length;
-                const loadCount = (patched.match(/<astro-island\b(?=[^>]*\bcomponent-export="GlobalModelQuickView")[^>]*\bclient="load"/g) || []).length;
-                if (remainingIdle !== 0 || loadCount !== 1) throw new Error(`unexpected patched island count in ${url.pathname}: idle=${remainingIdle} load=${loadCount}`);
-                const headers = { ...response.headers(), 'content-type': 'text/html; charset=utf-8' };
-                delete headers['content-encoding'];
-                delete headers['content-length'];
-                await route.fulfill({ status: response.status(), headers, body: patched });
+            async function diagnose(path, triggerSelector, triggerIslandExport) {
+              const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+              await context.addInitScript(() => {
+                window.__quickViewDiag = { showModalCalls: 0, closeCalls: 0 };
+                const showModal = HTMLDialogElement.prototype.showModal;
+                const close = HTMLDialogElement.prototype.close;
+                HTMLDialogElement.prototype.showModal = function(...args) {
+                  window.__quickViewDiag.showModalCalls += 1;
+                  return showModal.apply(this, args);
+                };
+                HTMLDialogElement.prototype.close = function(...args) {
+                  window.__quickViewDiag.closeCalls += 1;
+                  return close.apply(this, args);
+                };
               });
-            };
-
-            const routes = ['/', '/en/', '/models/', '/en/models/', '/landscape/', '/families/', '/papers/agentbench/', '/research/seed-openevo/results/'];
-            const viewports = [
-              { name: 'mobile', width: 390, height: 844 },
-              { name: 'tablet', width: 768, height: 1024 },
-              { name: 'desktop', width: 1440, height: 1000 },
-            ];
-            const themes = ['light', 'dark'];
-            let checks = 0;
-
-            for (const viewport of viewports) {
-              for (const theme of themes) {
-                const context = await browser.newContext({ viewport });
-                await context.addInitScript((value) => localStorage.setItem('atlas-theme', value), theme);
-                for (const routePath of routes) {
-                  const page = await context.newPage();
-                  await installHydrationPatch(page);
-                  const errors = [];
-                  page.on('pageerror', error => errors.push(error.message));
-                  page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
-                  const response = await page.goto(`${baseURL}${routePath}`, { waitUntil: 'domcontentloaded' });
-                  if (!response || response.status() >= 400) throw new Error(`${viewport.name}/${theme} ${routePath}: HTTP ${response?.status()}`);
-                  await page.waitForLoadState('networkidle');
-                  await page.locator('[data-site-header]').waitFor({ state: 'visible', timeout: 5000 });
-                  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
-                  if (overflow > 1) throw new Error(`${viewport.name}/${theme} ${routePath}: horizontal overflow ${overflow}px`);
-                  if (routePath === '/' && await page.locator('.global-quick-view').count() !== 0) throw new Error('global quick-view unexpectedly mounted on home');
-                  if (patchPaths.has(routePath)) {
-                    const client = await page.locator('astro-island[component-export="GlobalModelQuickView"]').getAttribute('client');
-                    if (client !== 'load') throw new Error(`${routePath}: surgical hydration patch not active, client=${client}`);
-                  }
-                  if (errors.length) throw new Error(`${viewport.name}/${theme} ${routePath}: ${errors.join(' | ')}`);
-                  checks += 1;
-                  await page.close();
-                }
-                await context.close();
-              }
-            }
-
-            {
-              const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
               const page = await context.newPage();
-              await installHydrationPatch(page);
-              await page.goto(`${baseURL}/papers/agentbench/`, { waitUntil: 'networkidle' });
-              const trigger = page.locator('.role-model-quick-view').first();
+              const modelRequests = [];
+              const errors = [];
+              page.on('request', req => { if (req.url().includes('/model-data/')) modelRequests.push(req.url()); });
+              page.on('pageerror', error => errors.push(`pageerror:${error.message}`));
+              page.on('console', msg => { if (msg.type() === 'error') errors.push(`console:${msg.text()}`); });
+              await page.goto(`${baseURL}${path}`, { waitUntil: 'networkidle' });
+
+              const receiverIsland = page.locator('astro-island[component-export="GlobalModelQuickView"]');
+              const triggerIsland = page.locator(`astro-island[component-export="${triggerIslandExport}"]`);
+              const trigger = page.locator(triggerSelector).first();
               await trigger.scrollIntoViewIfNeeded();
               await trigger.waitFor({ state: 'visible', timeout: 5000 });
+
+              const snapshot = async label => {
+                const value = await page.evaluate(({ label, triggerExport }) => {
+                  const receiver = document.querySelector('astro-island[component-export="GlobalModelQuickView"]');
+                  const triggerIsland = document.querySelector(`astro-island[component-export="${triggerExport}"]`);
+                  const dialog = document.querySelector('.global-quick-view');
+                  return {
+                    label,
+                    receiverClient: receiver?.getAttribute('client') ?? null,
+                    receiverSSR: receiver?.hasAttribute('ssr') ?? null,
+                    triggerClient: triggerIsland?.getAttribute('client') ?? null,
+                    triggerSSR: triggerIsland?.hasAttribute('ssr') ?? null,
+                    dialogOpenAttr: dialog?.hasAttribute('open') ?? null,
+                    dialogOpenProp: dialog?.open ?? null,
+                    diag: window.__quickViewDiag,
+                  };
+                }, { label, triggerExport: triggerIslandExport });
+                value.modelRequests = modelRequests.length;
+                value.errors = [...errors];
+                console.log('DIAG', path, JSON.stringify(value));
+                return value;
+              };
+
+              await snapshot('after-scroll-before-click');
               await trigger.click();
-              await page.locator('.global-quick-view').waitFor({ state: 'visible', timeout: 5000 });
+              await page.waitForTimeout(750);
+              const first = await snapshot('750ms-after-first-click');
+
+              // Wait explicitly for both islands to finish Astro hydration, then click again.
+              await receiverIsland.evaluate(el => el.hasAttribute('ssr')).catch(() => null);
+              await page.waitForFunction(({ triggerExport }) => {
+                const receiver = document.querySelector('astro-island[component-export="GlobalModelQuickView"]');
+                const triggerIsland = document.querySelector(`astro-island[component-export="${triggerExport}"]`);
+                return receiver && triggerIsland && !receiver.hasAttribute('ssr') && !triggerIsland.hasAttribute('ssr');
+              }, { triggerExport: triggerIslandExport }, { timeout: 7000 }).catch(() => null);
+              await snapshot('after-hydration-wait-before-second-click');
+              await trigger.click();
+              await page.waitForTimeout(750);
+              const second = await snapshot('750ms-after-second-click');
+
+              console.log('SUMMARY', path, JSON.stringify({ first, second, modelRequests, errors }));
               await context.close();
+              return { first, second };
             }
 
-            {
-              const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
-              const page = await context.newPage();
-              await installHydrationPatch(page);
-              await page.goto(`${baseURL}/families/`, { waitUntil: 'networkidle' });
-              const trigger = page.locator('.tree-quick-view').first();
-              await trigger.scrollIntoViewIfNeeded();
-              await trigger.waitFor({ state: 'visible', timeout: 5000 });
-              await trigger.click();
-              await page.locator('.global-quick-view').waitFor({ state: 'visible', timeout: 5000 });
-              await context.close();
-            }
+            const paper = await diagnose('/papers/agentbench/', '.role-model-quick-view', 'PaperRoleDiagram');
+            const family = await diagnose('/families/', '.tree-quick-view', 'default');
 
-            console.log(`WEBKIT_QUICKVIEW_AB_PASS checks=${checks} baseline=${process.env.BASELINE_SHA} hotfixTree=${process.env.HOTFIX_TREE}`);
+            console.log('WEBKIT_QUICKVIEW_DIAGNOSTICS_DONE', JSON.stringify({ paper, family, baseline: process.env.BASELINE_SHA }));
             await browser.close();
           })().catch(error => {
             console.error(error);
