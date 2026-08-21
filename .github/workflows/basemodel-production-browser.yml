@@ -1,0 +1,103 @@
+name: BaseModel Production Browser Acceptance
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 3 * * *'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/basemodel-production-browser.yml'
+      - 'ci/basemodel-production-acceptance.mjs'
+      - 'ci/README.md'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: basemodel-production-browser
+  cancel-in-progress: true
+
+env:
+  BASEMODEL_URL: https://basemodel-preview.vercel.app
+
+jobs:
+  webkit:
+    name: WebKit 26.5 production acceptance
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout harness
+        uses: actions/checkout@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install Playwright WebKit
+        run: |
+          npm install --no-save playwright@1.62.1
+          npx playwright install --with-deps webkit
+      - name: Run production WebKit acceptance
+        run: node ci/basemodel-production-acceptance.mjs
+
+  lighthouse:
+    name: Lighthouse production lab baseline
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout harness
+        uses: actions/checkout@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install Lighthouse
+        run: npm install --no-save lighthouse@13.4.1
+      - name: Run Lighthouse mobile and desktop
+        run: |
+          mkdir -p lighthouse-results
+          npx lighthouse "$BASEMODEL_URL/" \
+            --only-categories=performance \
+            --output=json \
+            --output-path=lighthouse-results/home-mobile.json \
+            --chrome-flags='--headless --no-sandbox --disable-gpu' \
+            --quiet
+          npx lighthouse "$BASEMODEL_URL/" \
+            --preset=desktop \
+            --only-categories=performance \
+            --output=json \
+            --output-path=lighthouse-results/home-desktop.json \
+            --chrome-flags='--headless --no-sandbox --disable-gpu' \
+            --quiet
+          npx lighthouse "$BASEMODEL_URL/research/seed-openevo/results/" \
+            --only-categories=performance \
+            --output=json \
+            --output-path=lighthouse-results/results-mobile.json \
+            --chrome-flags='--headless --no-sandbox --disable-gpu' \
+            --quiet
+      - name: Print performance summary
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          for (const file of ['home-mobile.json', 'home-desktop.json', 'results-mobile.json']) {
+            const r = JSON.parse(fs.readFileSync(`lighthouse-results/${file}`, 'utf8'));
+            const a = r.audits;
+            const summary = {
+              file,
+              score: Math.round((r.categories.performance.score || 0) * 100),
+              fcp_ms: Math.round(a['first-contentful-paint'].numericValue),
+              lcp_ms: Math.round(a['largest-contentful-paint'].numericValue),
+              tbt_ms: Math.round(a['total-blocking-time'].numericValue),
+              cls: Number(a['cumulative-layout-shift'].numericValue.toFixed(4)),
+              speed_index_ms: Math.round(a['speed-index'].numericValue),
+            };
+            console.log('LIGHTHOUSE_SUMMARY', JSON.stringify(summary));
+          }
+          NODE
+      - name: Upload Lighthouse JSON
+        uses: actions/upload-artifact@v4
+        with:
+          name: basemodel-lighthouse
+          path: lighthouse-results/*.json
+          retention-days: 14
