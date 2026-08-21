@@ -1,3 +1,4 @@
+import postcss from 'postcss';
 import { chromium, webkit } from 'playwright';
 
 const BASE = 'https://basemodel-preview.vercel.app';
@@ -18,8 +19,74 @@ const selectors = [
   '.lang-switch', '.theme-toggle', '.menu-toggle', '.mobile-menu',
 ];
 
-function normalizeSnapshot(value) {
-  return JSON.stringify(value);
+const normalizeSelector = (value = '') => value.replace(/\s+/g, '');
+const selectorIs = (selector, expected) => normalizeSelector(selector) === normalizeSelector(expected);
+const hasAllSelectors = (selector, names) => {
+  const normalized = normalizeSelector(selector);
+  return names.every((name) => normalized.includes(normalizeSelector(name)));
+};
+const mediaMatches = (media, px) => (media || '').replace(/\s+/g, '').toLowerCase().includes(`${px}px`);
+
+function nearestMedia(rule) {
+  let parent = rule.parent;
+  while (parent) {
+    if (parent.type === 'atrule' && parent.name === 'media') return parent.params || '';
+    parent = parent.parent;
+  }
+  return '';
+}
+
+function declarations(rule) {
+  const out = new Map();
+  for (const node of rule.nodes || []) {
+    if (node.type === 'decl') out.set(node.prop, node.value);
+  }
+  return out;
+}
+
+function isTargetDesignRefinementHeaderRule(rule) {
+  const selector = rule.selector || '';
+  const media = nearestMedia(rule);
+  const d = declarations(rule);
+
+  if (!media) {
+    if (selectorIs(selector, '.nav-inner') && d.get('min-height') === '66px' && d.get('gap') === '14px') return true;
+    if (hasAllSelectors(selector, ['.command-search-trigger', '.lang-switch', '.theme-toggle', '.menu-toggle']) && d.has('flex')) return true;
+    if (selectorIs(selector, '.desktop-nav a') && d.get('white-space') === 'nowrap') return true;
+  }
+
+  if (mediaMatches(media, 1080)) {
+    if (selectorIs(selector, '.nav-inner') && d.get('gap') === '10px') return true;
+    if (selectorIs(selector, '.brand small') && d.get('display') === 'none') return true;
+    if (hasAllSelectors(selector, ['.nav-primary', '.nav-secondary']) && d.get('gap') === '11px') return true;
+    if (selectorIs(selector, '.nav-secondary') && d.get('padding-left') === '11px') return true;
+  }
+
+  if (mediaMatches(media, 960)) {
+    if (hasAllSelectors(selector, ['.desktop-nav', '.nav-inner > .lang-switch']) && d.get('display') === 'none') return true;
+    if (selectorIs(selector, '.menu-toggle') && d.get('display') === 'flex') return true;
+    if (selectorIs(selector, '.mobile-menu.is-open') && d.get('display') === 'block') return true;
+  }
+
+  if (mediaMatches(media, 520)) {
+    if (selectorIs(selector, '.nav-inner') && d.get('min-height') === '60px') return true;
+    if (selectorIs(selector, '.brand span:last-child') && d.get('display') === 'none') return true;
+    if (selectorIs(selector, '.command-search-trigger') && d.get('max-width') === '104px' && d.get('overflow') === 'hidden') return true;
+    if (selectorIs(selector, '.command-search-trigger kbd') && d.get('display') === 'none') return true;
+  }
+
+  return false;
+}
+
+function retireDesignRefinementHeaderRules(css) {
+  const root = postcss.parse(css);
+  const removed = [];
+  root.walkRules((rule) => {
+    if (!isTargetDesignRefinementHeaderRule(rule)) return;
+    removed.push({ selector: rule.selector, media: nearestMedia(rule), css: rule.toString() });
+    rule.remove();
+  });
+  return { css: root.toString(), removed };
 }
 
 async function setTheme(context, theme) {
@@ -58,88 +125,19 @@ async function snapshot(page) {
   }, { selectors, properties });
 }
 
-async function removeDesignRefinementHeaderRules(page) {
-  return page.evaluate(() => {
-    const normalizeMedia = (value = '') => value.replace(/\s+/g, '').toLowerCase();
-    const normalizeSelector = (value = '') => value.replace(/\s+/g, '');
-    const selectorIs = (selector, expected) => normalizeSelector(selector) === normalizeSelector(expected);
-    const hasAllSelectors = (selector, names) => {
-      const normalized = normalizeSelector(selector);
-      return names.every((name) => normalized.includes(normalizeSelector(name)));
-    };
-    const mediaMatches = (media, px) => normalizeMedia(media).includes(`${px}px`);
-    const isStyleRule = (rule) => typeof rule?.selectorText === 'string' && rule?.style;
-    const isGroupingRule = (rule) => rule?.cssRules && typeof rule.deleteRule === 'function';
+async function preparePage(page, viewportWidth) {
+  await page.locator('.site-header').waitFor({ state: 'visible' });
+  await page.evaluate(() => document.fonts?.ready);
+  if (viewportWidth <= 1080) {
+    await page.locator('[data-menu-toggle]').click();
+    await page.locator('[data-mobile-menu].is-open').waitFor({ state: 'visible' });
+  }
+}
 
-    const matches = (rule, media) => {
-      if (!isStyleRule(rule)) return false;
-      const s = rule.selectorText || '';
-      const style = rule.style;
-      const m = media || '';
-
-      if (!m) {
-        if (selectorIs(s, '.nav-inner') && style.minHeight === '66px' && style.gap === '14px') return true;
-        if (hasAllSelectors(s, ['.command-search-trigger', '.lang-switch', '.theme-toggle', '.menu-toggle']) && style.flex) return true;
-        if (selectorIs(s, '.desktop-nav a') && style.whiteSpace === 'nowrap') return true;
-      }
-
-      if (mediaMatches(m, 1080)) {
-        if (selectorIs(s, '.nav-inner') && style.gap === '10px') return true;
-        if (selectorIs(s, '.brand small') && style.display === 'none') return true;
-        if (hasAllSelectors(s, ['.nav-primary', '.nav-secondary']) && style.gap === '11px') return true;
-        if (selectorIs(s, '.nav-secondary') && style.paddingLeft === '11px') return true;
-      }
-
-      if (mediaMatches(m, 960)) {
-        if (hasAllSelectors(s, ['.desktop-nav', '.nav-inner > .lang-switch']) && style.display === 'none') return true;
-        if (selectorIs(s, '.menu-toggle') && style.display === 'flex') return true;
-        if (selectorIs(s, '.mobile-menu.is-open') && style.display === 'block') return true;
-      }
-
-      if (mediaMatches(m, 520)) {
-        if (selectorIs(s, '.nav-inner') && style.minHeight === '60px') return true;
-        if (selectorIs(s, '.brand span:last-child') && style.display === 'none') return true;
-        if (selectorIs(s, '.command-search-trigger') && style.maxWidth === '104px' && style.overflow === 'hidden') return true;
-        if (selectorIs(s, '.command-search-trigger kbd') && style.display === 'none') return true;
-      }
-
-      return false;
-    };
-
-    const diagnostics = [];
-    let removed = 0;
-
-    const walk = (container, media = '') => {
-      const rules = container?.cssRules;
-      if (!rules) return;
-      for (let index = rules.length - 1; index >= 0; index -= 1) {
-        const rule = rules[index];
-        const nestedMedia = rule?.conditionText || rule?.media?.mediaText || media;
-        if (isGroupingRule(rule)) {
-          walk(rule, nestedMedia);
-          continue;
-        }
-
-        if (isStyleRule(rule)) {
-          const selector = rule.selectorText || '';
-          if (/nav-inner|brand|menu-toggle|mobile-menu|command-search-trigger|desktop-nav|nav-primary|nav-secondary/.test(selector)) {
-            diagnostics.push({ selector, media, cssText: rule.style?.cssText || '' });
-          }
-        }
-
-        if (matches(rule, media)) {
-          container.deleteRule(index);
-          removed += 1;
-        }
-      }
-    };
-
-    for (const sheet of [...document.styleSheets]) {
-      try { walk(sheet); } catch {}
-    }
-
-    return { removed, diagnostics };
-  });
+async function closeMobileMenu(page, viewportWidth) {
+  if (viewportWidth > 1080) return;
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => document.querySelector('[data-mobile-menu]')?.getAttribute('aria-hidden') === 'true');
 }
 
 async function runBrowser(browserType, name) {
@@ -150,39 +148,56 @@ async function runBrowser(browserType, name) {
       for (const theme of themes) {
         const context = await browser.newContext({ viewport });
         await setTheme(context, theme);
-        const page = await context.newPage();
+
         for (const route of routes) {
-          const response = await page.goto(`${BASE}${route}`, { waitUntil: 'networkidle', timeout: 30000 });
-          if (!response?.ok()) throw new Error(`${name}/${viewport.name}/${theme}/${route} HTTP ${response?.status()}`);
-          await page.locator('.site-header').waitFor({ state: 'visible' });
+          const baseline = await context.newPage();
+          const candidate = await context.newPage();
+          let interceptionCount = 0;
+          let removedRules = null;
 
-          if (viewport.width <= 1080) {
-            await page.locator('[data-menu-toggle]').click();
-            await page.locator('[data-mobile-menu].is-open').waitFor({ state: 'visible' });
+          await candidate.route('**/_astro/AppLayout.*.css', async (intercepted) => {
+            const response = await intercepted.fetch();
+            const css = await response.text();
+            const retired = retireDesignRefinementHeaderRules(css);
+            removedRules = retired.removed;
+            interceptionCount += 1;
+            await intercepted.fulfill({ response, body: retired.css, contentType: 'text/css; charset=utf-8' });
+          });
+
+          const [baselineResponse, candidateResponse] = await Promise.all([
+            baseline.goto(`${BASE}${route}`, { waitUntil: 'networkidle', timeout: 30000 }),
+            candidate.goto(`${BASE}${route}`, { waitUntil: 'networkidle', timeout: 30000 }),
+          ]);
+          if (!baselineResponse?.ok() || !candidateResponse?.ok()) {
+            throw new Error(`${name}/${viewport.name}/${theme}/${route}: HTTP baseline=${baselineResponse?.status()} candidate=${candidateResponse?.status()}`);
+          }
+          if (interceptionCount !== 1) throw new Error(`${name}/${route}: expected one AppLayout CSS interception, got ${interceptionCount}`);
+          if (!removedRules || removedRules.length !== 14) {
+            console.error('REMOVED_RULES', JSON.stringify(removedRules, null, 2));
+            throw new Error(`${name}/${route}: expected 14 design-refinement Header rules, removed ${removedRules?.length ?? 0}`);
           }
 
-          const before = await snapshot(page);
-          const retirement = await removeDesignRefinementHeaderRules(page);
-          if (retirement.removed !== 14) {
-            console.error('CSSOM_DIAGNOSTICS', JSON.stringify(retirement.diagnostics, null, 2));
-            throw new Error(`${name}/${route}: expected 14 design-refinement Header rules, removed ${retirement.removed}`);
-          }
-          await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
-          const after = await snapshot(page);
+          await Promise.all([
+            preparePage(baseline, viewport.width),
+            preparePage(candidate, viewport.width),
+          ]);
 
-          if (normalizeSnapshot(before) !== normalizeSnapshot(after)) {
-            console.error('BEFORE', JSON.stringify(before, null, 2));
-            console.error('AFTER', JSON.stringify(after, null, 2));
+          const [before, after] = await Promise.all([snapshot(baseline), snapshot(candidate)]);
+          if (JSON.stringify(before) !== JSON.stringify(after)) {
+            console.error('BASELINE', JSON.stringify(before, null, 2));
+            console.error('CANDIDATE', JSON.stringify(after, null, 2));
             throw new Error(`${name}/${viewport.name}/${theme}/${route}: computed Header snapshot changed after legacy-rule removal`);
           }
           if (after.document.scrollWidth > after.document.clientWidth + 1 || after.document.bodyScrollWidth > after.document.clientWidth + 1) {
             throw new Error(`${name}/${viewport.name}/${theme}/${route}: horizontal overflow after removal`);
           }
 
-          if (viewport.width <= 1080) {
-            await page.keyboard.press('Escape');
-            await page.waitForFunction(() => document.querySelector('[data-mobile-menu]')?.getAttribute('aria-hidden') === 'true');
-          }
+          await Promise.all([
+            closeMobileMenu(baseline, viewport.width),
+            closeMobileMenu(candidate, viewport.width),
+          ]);
+          await baseline.close();
+          await candidate.close();
           cases += 1;
         }
         await context.close();
