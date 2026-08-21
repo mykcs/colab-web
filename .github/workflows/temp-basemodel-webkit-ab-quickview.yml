@@ -1,4 +1,4 @@
-name: Temporary BaseModel WebKit QuickView Diagnostics
+name: Temporary BaseModel WebKit QuickView Bridge A-B
 
 on:
   push:
@@ -9,7 +9,7 @@ on:
       - main
 
 jobs:
-  webkit-diagnostics:
+  webkit-bridge-ab:
     runs-on: ubuntu-24.04
     container:
       image: mcr.microsoft.com/playwright:v1.62.1-noble
@@ -21,7 +21,7 @@ jobs:
           cd /tmp/basemodel-webkit
           npm init -y
           npm install @playwright/test@1.62.1
-      - name: Diagnose island readiness on Production
+      - name: Validate delegated QuickView bridge on Production
         working-directory: /tmp/basemodel-webkit
         env:
           BASE_URL: https://basemodel-preview.vercel.app
@@ -34,96 +34,69 @@ jobs:
             const browser = await webkit.launch();
             const baseURL = process.env.BASE_URL;
 
-            async function diagnose(path, triggerSelector, triggerIslandExport) {
+            async function verify(path, triggerSelector, triggerIslandExport) {
               const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
               await context.addInitScript(() => {
-                window.__quickViewDiag = { showModalCalls: 0, closeCalls: 0 };
+                window.__quickViewBridgeDiag = { bridgeCalls: 0, showModalCalls: 0 };
                 const showModal = HTMLDialogElement.prototype.showModal;
-                const close = HTMLDialogElement.prototype.close;
                 HTMLDialogElement.prototype.showModal = function(...args) {
-                  window.__quickViewDiag.showModalCalls += 1;
+                  window.__quickViewBridgeDiag.showModalCalls += 1;
                   return showModal.apply(this, args);
                 };
-                HTMLDialogElement.prototype.close = function(...args) {
-                  window.__quickViewDiag.closeCalls += 1;
-                  return close.apply(this, args);
-                };
+                document.addEventListener('click', async event => {
+                  const target = event.target;
+                  if (!(target instanceof Element)) return;
+                  const button = target.closest('.role-model-quick-view, .tree-quick-view');
+                  if (!button) return;
+                  const scope = button.closest('.role-model-actions, .tree-checkpoint');
+                  const link = scope?.querySelector('a[href*="/models/"]');
+                  const href = link?.getAttribute('href') ?? '';
+                  const match = href.match(/\/models\/([^/]+)\/?$/);
+                  if (!match) return;
+                  window.__quickViewBridgeDiag.bridgeCalls += 1;
+                  const store = await import('/_astro/ui.Co5TKrLJ.js');
+                  store.r(decodeURIComponent(match[1]));
+                }, true);
               });
+
               const page = await context.newPage();
               const modelRequests = [];
               const errors = [];
-              page.on('request', req => { if (req.url().includes('/model-data/')) modelRequests.push(req.url()); });
-              page.on('pageerror', error => errors.push(`pageerror:${error.message}`));
-              page.on('console', msg => { if (msg.type() === 'error') errors.push(`console:${msg.text()}`); });
+              page.on('request', request => { if (request.url().includes('/model-data/')) modelRequests.push(request.url()); });
+              page.on('pageerror', error => errors.push(error.message));
+              page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
               await page.goto(`${baseURL}${path}`, { waitUntil: 'networkidle' });
 
-              const receiverIsland = page.locator('astro-island[component-export="GlobalModelQuickView"]');
               const trigger = page.locator(triggerSelector).first();
               await trigger.scrollIntoViewIfNeeded();
               await trigger.waitFor({ state: 'visible', timeout: 5000 });
-
-              const snapshot = async label => {
-                const value = await page.evaluate(({ label, triggerExport }) => {
-                  const receiver = document.querySelector('astro-island[component-export="GlobalModelQuickView"]');
-                  const triggerIsland = document.querySelector(`astro-island[component-export="${triggerExport}"]`);
-                  const dialog = document.querySelector('.global-quick-view');
-                  return {
-                    label,
-                    receiverClient: receiver?.getAttribute('client') ?? null,
-                    receiverSSR: receiver?.hasAttribute('ssr') ?? null,
-                    triggerClient: triggerIsland?.getAttribute('client') ?? null,
-                    triggerSSR: triggerIsland?.hasAttribute('ssr') ?? null,
-                    dialogOpenAttr: dialog?.hasAttribute('open') ?? null,
-                    dialogOpenProp: dialog?.open ?? null,
-                    diag: window.__quickViewDiag,
-                  };
-                }, { label, triggerExport: triggerIslandExport });
-                value.modelRequests = modelRequests.length;
-                value.errors = [...errors];
-                console.log('DIAG', path, JSON.stringify(value));
-                return value;
-              };
-
-              await snapshot('after-scroll-before-click');
-              await trigger.click();
-              await page.waitForTimeout(750);
-              const first = await snapshot('750ms-after-first-click');
-
-              await page.waitForFunction(({ triggerExport }) => {
+              const before = await page.evaluate(triggerExport => {
                 const receiver = document.querySelector('astro-island[component-export="GlobalModelQuickView"]');
                 const triggerIsland = document.querySelector(`astro-island[component-export="${triggerExport}"]`);
-                return receiver && triggerIsland && !receiver.hasAttribute('ssr') && !triggerIsland.hasAttribute('ssr');
-              }, { triggerExport: triggerIslandExport }, { timeout: 7000 }).catch(() => null);
-              await snapshot('after-hydration-wait-before-second-click');
-              await trigger.click();
-              await page.waitForTimeout(750);
-              const second = await snapshot('750ms-after-second-click');
-
-              // Directly drive the exact production nanostore to separate sender vs receiver failures.
-              const direct = await page.evaluate(async () => {
-                const store = await import('/_astro/ui.Co5TKrLJ.js');
-                const before = store.i.get();
-                store.r('gpt-4');
-                await new Promise(resolve => setTimeout(resolve, 750));
-                const dialog = document.querySelector('.global-quick-view');
                 return {
-                  before,
-                  after: store.i.get(),
-                  dialogOpen: dialog?.open ?? null,
-                  diag: window.__quickViewDiag,
+                  receiverSSR: receiver?.hasAttribute('ssr') ?? null,
+                  triggerSSR: triggerIsland?.hasAttribute('ssr') ?? null,
                 };
-              });
-              console.log('DIRECT_STORE', path, JSON.stringify(direct));
+              }, triggerIslandExport);
 
-              console.log('SUMMARY', path, JSON.stringify({ first, second, direct, modelRequests, errors }));
+              // Fire a synchronous DOM click immediately. The delegated bridge must work even if React is not hydrated yet.
+              await trigger.evaluate(button => button.click());
+              await page.locator('.global-quick-view').waitFor({ state: 'visible', timeout: 5000 });
+              const after = await page.evaluate(() => ({
+                open: document.querySelector('.global-quick-view')?.open ?? false,
+                diag: window.__quickViewBridgeDiag,
+              }));
+              if (after.diag.bridgeCalls < 1) throw new Error(`${path}: delegated bridge did not run`);
+              if (after.diag.showModalCalls < 1) throw new Error(`${path}: receiver did not call showModal`);
+              if (modelRequests.length < 1) throw new Error(`${path}: no model-data request after bridge click`);
+              if (errors.length) throw new Error(`${path}: ${errors.join(' | ')}`);
+              console.log('BRIDGE_PASS', path, JSON.stringify({ before, after, modelRequests }));
               await context.close();
-              return { first, second, direct };
             }
 
-            const paper = await diagnose('/papers/agentbench/', '.role-model-quick-view', 'PaperRoleDiagram');
-            const family = await diagnose('/families/', '.tree-quick-view', 'default');
-
-            console.log('WEBKIT_QUICKVIEW_DIAGNOSTICS_DONE', JSON.stringify({ paper, family, baseline: process.env.BASELINE_SHA }));
+            await verify('/papers/agentbench/', '.role-model-quick-view', 'PaperRoleDiagram');
+            await verify('/families/', '.tree-quick-view', 'default');
+            console.log(`WEBKIT_QUICKVIEW_BRIDGE_PASS baseline=${process.env.BASELINE_SHA}`);
             await browser.close();
           })().catch(error => {
             console.error(error);
