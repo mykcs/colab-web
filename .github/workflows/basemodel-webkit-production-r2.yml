@@ -104,7 +104,7 @@ jobs:
             await page.waitForFunction(() => document.querySelector('[data-mobile-menu]')?.getAttribute('aria-hidden') === 'true');
 
             await page.goto(`${BASE}/families/`, { waitUntil: 'domcontentloaded' });
-            assert(await page.locator('.global-quick-view').count() === 1, 'families missing global quick view shell');
+            await page.locator('.global-quick-view').waitFor({ state: 'attached', timeout: 10000 });
             const familyTrigger = page.locator('.tree-quick-view').first();
             await familyTrigger.scrollIntoViewIfNeeded();
             await familyTrigger.waitFor({ state: 'visible' });
@@ -113,6 +113,7 @@ jobs:
             await page.keyboard.press('Escape');
 
             await page.goto(`${BASE}/papers/agentbench/`, { waitUntil: 'domcontentloaded' });
+            await page.locator('.global-quick-view').waitFor({ state: 'attached', timeout: 10000 });
             const paperTrigger = page.locator('.role-model-quick-view').first();
             await paperTrigger.scrollIntoViewIfNeeded();
             await paperTrigger.waitFor({ state: 'visible', timeout: 10000 });
