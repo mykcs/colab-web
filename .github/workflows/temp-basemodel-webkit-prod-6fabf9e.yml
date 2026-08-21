@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - temp/basemodel-webkit-prod-6fabf9e-20260821
+  pull_request:
+    branches:
+      - main
 
 jobs:
   webkit-production:
@@ -93,7 +96,7 @@ jobs:
               await page.goto(`${baseURL}/`, { waitUntil: 'networkidle' });
               const resource = page.locator('[data-resource-menu]');
               await resource.locator('summary').click();
-              if (!(await resource.getAttribute('open') !== null)) throw new Error('resource menu did not open');
+              if ((await resource.getAttribute('open')) === null) throw new Error('resource menu did not open');
               const themeToggle = page.locator('[data-theme-toggle]').first();
               await themeToggle.click();
               if ((await page.locator('html').getAttribute('data-theme')) !== 'dark') throw new Error('theme did not switch dark');
