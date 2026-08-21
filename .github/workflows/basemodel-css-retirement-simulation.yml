@@ -1,0 +1,30 @@
+name: BaseModel CSS Retirement Simulation
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'ci/basemodel-css-retirement-simulation.mjs'
+      - '.github/workflows/basemodel-css-retirement-simulation.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  simulate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout harness
+        uses: actions/checkout@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install Playwright browsers
+        run: |
+          npm install --no-save playwright@1.62.1
+          npx playwright install --with-deps chromium webkit
+      - name: Simulate legacy Header rule retirement
+        run: node ci/basemodel-css-retirement-simulation.mjs
