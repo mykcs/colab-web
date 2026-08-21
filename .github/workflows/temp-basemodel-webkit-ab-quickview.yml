@@ -21,7 +21,7 @@ jobs:
           cd /tmp/basemodel-webkit
           npm init -y
           npm install @playwright/test@1.62.1
-      - name: Validate delegated QuickView bridge on Production
+      - name: Validate preloaded delegated QuickView bridge on Production
         working-directory: /tmp/basemodel-webkit
         env:
           BASE_URL: https://basemodel-preview.vercel.app
@@ -43,20 +43,6 @@ jobs:
                   window.__quickViewBridgeDiag.showModalCalls += 1;
                   return showModal.apply(this, args);
                 };
-                document.addEventListener('click', async event => {
-                  const target = event.target;
-                  if (!(target instanceof Element)) return;
-                  const button = target.closest('.role-model-quick-view, .tree-quick-view');
-                  if (!button) return;
-                  const scope = button.closest('.role-model-actions, .tree-checkpoint');
-                  const link = scope?.querySelector('a[href*="/models/"]');
-                  const href = link?.getAttribute('href') ?? '';
-                  const match = href.match(/\/models\/([^/]+)\/?$/);
-                  if (!match) return;
-                  window.__quickViewBridgeDiag.bridgeCalls += 1;
-                  const store = await import('/_astro/ui.Co5TKrLJ.js');
-                  store.r(decodeURIComponent(match[1]));
-                }, true);
               });
 
               const page = await context.newPage();
@@ -67,6 +53,26 @@ jobs:
               page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
               await page.goto(`${baseURL}${path}`, { waitUntil: 'networkidle' });
 
+              // Emulate a bundled Astro bridge: preload the exact production store first,
+              // then install a synchronous delegated listener that never waits on import().
+              await page.evaluate(async () => {
+                const store = await import('/_astro/ui.Co5TKrLJ.js');
+                window.__quickViewStore = store;
+                document.addEventListener('click', event => {
+                  const target = event.target;
+                  if (!(target instanceof Element)) return;
+                  const button = target.closest('.role-model-quick-view, .tree-quick-view');
+                  if (!button) return;
+                  const scope = button.closest('.role-model-actions, .tree-checkpoint');
+                  const link = scope?.querySelector('a[href*="/models/"]');
+                  const href = link?.getAttribute('href') ?? '';
+                  const match = href.match(/\/models\/([^/]+)\/?$/);
+                  if (!match) return;
+                  window.__quickViewBridgeDiag.bridgeCalls += 1;
+                  window.__quickViewStore.r(decodeURIComponent(match[1]));
+                }, true);
+              });
+
               const trigger = page.locator(triggerSelector).first();
               await trigger.scrollIntoViewIfNeeded();
               await trigger.waitFor({ state: 'visible', timeout: 5000 });
@@ -76,18 +82,21 @@ jobs:
                 return {
                   receiverSSR: receiver?.hasAttribute('ssr') ?? null,
                   triggerSSR: triggerIsland?.hasAttribute('ssr') ?? null,
+                  storeValue: window.__quickViewStore.i.get(),
                 };
               }, triggerIslandExport);
 
-              // Fire a synchronous DOM click immediately. The delegated bridge must work even if React is not hydrated yet.
+              // Use a synchronous DOM click so the bridge is exercised at the exact hydration edge.
               await trigger.evaluate(button => button.click());
               await page.locator('.global-quick-view').waitFor({ state: 'visible', timeout: 5000 });
               const after = await page.evaluate(() => ({
                 open: document.querySelector('.global-quick-view')?.open ?? false,
+                storeValue: window.__quickViewStore.i.get(),
                 diag: window.__quickViewBridgeDiag,
               }));
               if (after.diag.bridgeCalls < 1) throw new Error(`${path}: delegated bridge did not run`);
               if (after.diag.showModalCalls < 1) throw new Error(`${path}: receiver did not call showModal`);
+              if (!after.storeValue) throw new Error(`${path}: QuickView store was not updated`);
               if (modelRequests.length < 1) throw new Error(`${path}: no model-data request after bridge click`);
               if (errors.length) throw new Error(`${path}: ${errors.join(' | ')}`);
               console.log('BRIDGE_PASS', path, JSON.stringify({ before, after, modelRequests }));
