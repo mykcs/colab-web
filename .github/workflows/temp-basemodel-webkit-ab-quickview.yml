@@ -11,18 +11,16 @@ on:
 jobs:
   webkit-diagnostics:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    container:
+      image: mcr.microsoft.com/playwright:v1.62.1-noble
+    timeout-minutes: 12
     steps:
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-      - name: Install Playwright WebKit
+      - name: Install matching Playwright package
         run: |
           mkdir -p /tmp/basemodel-webkit
           cd /tmp/basemodel-webkit
           npm init -y
           npm install @playwright/test@1.62.1
-          npx playwright install --with-deps webkit
       - name: Diagnose island readiness on Production
         working-directory: /tmp/basemodel-webkit
         env:
@@ -60,7 +58,6 @@ jobs:
               await page.goto(`${baseURL}${path}`, { waitUntil: 'networkidle' });
 
               const receiverIsland = page.locator('astro-island[component-export="GlobalModelQuickView"]');
-              const triggerIsland = page.locator(`astro-island[component-export="${triggerIslandExport}"]`);
               const trigger = page.locator(triggerSelector).first();
               await trigger.scrollIntoViewIfNeeded();
               await trigger.waitFor({ state: 'visible', timeout: 5000 });
@@ -92,8 +89,6 @@ jobs:
               await page.waitForTimeout(750);
               const first = await snapshot('750ms-after-first-click');
 
-              // Wait explicitly for both islands to finish Astro hydration, then click again.
-              await receiverIsland.evaluate(el => el.hasAttribute('ssr')).catch(() => null);
               await page.waitForFunction(({ triggerExport }) => {
                 const receiver = document.querySelector('astro-island[component-export="GlobalModelQuickView"]');
                 const triggerIsland = document.querySelector(`astro-island[component-export="${triggerExport}"]`);
@@ -104,9 +99,25 @@ jobs:
               await page.waitForTimeout(750);
               const second = await snapshot('750ms-after-second-click');
 
-              console.log('SUMMARY', path, JSON.stringify({ first, second, modelRequests, errors }));
+              // Directly drive the exact production nanostore to separate sender vs receiver failures.
+              const direct = await page.evaluate(async () => {
+                const store = await import('/_astro/ui.Co5TKrLJ.js');
+                const before = store.i.get();
+                store.r('gpt-4');
+                await new Promise(resolve => setTimeout(resolve, 750));
+                const dialog = document.querySelector('.global-quick-view');
+                return {
+                  before,
+                  after: store.i.get(),
+                  dialogOpen: dialog?.open ?? null,
+                  diag: window.__quickViewDiag,
+                };
+              });
+              console.log('DIRECT_STORE', path, JSON.stringify(direct));
+
+              console.log('SUMMARY', path, JSON.stringify({ first, second, direct, modelRequests, errors }));
               await context.close();
-              return { first, second };
+              return { first, second, direct };
             }
 
             const paper = await diagnose('/papers/agentbench/', '.role-model-quick-view', 'PaperRoleDiagram');
