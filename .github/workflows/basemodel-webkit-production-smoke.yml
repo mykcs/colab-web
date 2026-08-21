@@ -28,121 +28,126 @@ jobs:
           const assert = require('node:assert/strict');
           const { webkit } = require('playwright');
 
-          const base = process.env.BASEMODEL_URL;
-          const routes = [
-            '/',
-            '/landscape/',
-            '/research/seed-openevo/',
-            '/research/seed-openevo/results/',
-            '/guide/openevo-webshop-alfworld/',
-            '/en/research/seed-openevo/results/',
-          ];
-          const viewports = [
-            { name: 'mobile', width: 390, height: 844 },
-            { name: 'tablet', width: 768, height: 1024 },
-            { name: 'desktop', width: 1440, height: 1000 },
-          ];
-          const themes = ['light', 'dark'];
+          (async () => {
+            const base = process.env.BASEMODEL_URL;
+            const routes = [
+              '/',
+              '/landscape/',
+              '/research/seed-openevo/',
+              '/research/seed-openevo/results/',
+              '/guide/openevo-webshop-alfworld/',
+              '/en/research/seed-openevo/results/',
+            ];
+            const viewports = [
+              { name: 'mobile', width: 390, height: 844 },
+              { name: 'tablet', width: 768, height: 1024 },
+              { name: 'desktop', width: 1440, height: 1000 },
+            ];
+            const themes = ['light', 'dark'];
 
-          const browser = await webkit.launch();
-          try {
-            for (const viewport of viewports) {
-              for (const theme of themes) {
-                const context = await browser.newContext({
-                  viewport: { width: viewport.width, height: viewport.height },
-                });
-                await context.addInitScript((value) => {
-                  try { localStorage.setItem('atlas-theme', value); } catch {}
-                }, theme);
-                const page = await context.newPage();
-
-                for (const route of routes) {
-                  const response = await page.goto(`${base}${route}`, {
-                    waitUntil: 'domcontentloaded',
-                    timeout: 45_000,
+            const browser = await webkit.launch();
+            try {
+              for (const viewport of viewports) {
+                for (const theme of themes) {
+                  const context = await browser.newContext({
+                    viewport: { width: viewport.width, height: viewport.height },
                   });
-                  assert(response, `${route}: no navigation response`);
-                  assert(response.status() < 400, `${route}: HTTP ${response.status()}`);
-                  await page.waitForLoadState('networkidle', { timeout: 15_000 }).catch(() => {});
+                  await context.addInitScript((value) => {
+                    try { localStorage.setItem('atlas-theme', value); } catch {}
+                  }, theme);
+                  const page = await context.newPage();
 
-                  const header = page.locator('[data-site-header]');
-                  assert.equal(await header.count(), 1, `${route}: site header missing`);
-                  assert(await header.isVisible(), `${route}: site header not visible`);
+                  for (const route of routes) {
+                    const response = await page.goto(`${base}${route}`, {
+                      waitUntil: 'domcontentloaded',
+                      timeout: 45_000,
+                    });
+                    assert(response, `${route}: no navigation response`);
+                    assert(response.status() < 400, `${route}: HTTP ${response.status()}`);
+                    await page.waitForLoadState('networkidle', { timeout: 15_000 }).catch(() => {});
 
-                  const state = await page.evaluate(() => ({
-                    theme: document.documentElement.dataset.theme,
-                    scrollWidth: document.documentElement.scrollWidth,
-                    clientWidth: document.documentElement.clientWidth,
-                    bodyText: document.body.innerText.length,
-                  }));
-                  assert.equal(state.theme, theme, `${route}: expected ${theme}, got ${state.theme}`);
-                  assert(state.bodyText > 100, `${route}: suspiciously empty body`);
-                  assert(
-                    state.scrollWidth <= state.clientWidth + 1,
-                    `${route}: document horizontal overflow ${state.scrollWidth} > ${state.clientWidth}`,
-                  );
+                    const header = page.locator('[data-site-header]');
+                    assert.equal(await header.count(), 1, `${route}: site header missing`);
+                    assert(await header.isVisible(), `${route}: site header not visible`);
 
-                  const auditFailures = await page.evaluate(() => {
-                    const failures = [];
-                    for (const root of document.querySelectorAll('[data-ui-audit]')) {
-                      for (const el of root.querySelectorAll('[data-ui-audit-item]')) {
-                        if (!(el instanceof HTMLElement)) continue;
-                        const style = getComputedStyle(el);
-                        const rect = el.getBoundingClientRect();
-                        if (style.display === 'none' || style.visibility === 'hidden') continue;
-                        if (rect.width < 0 || rect.height < 0) failures.push('invalid geometry');
+                    const state = await page.evaluate(() => ({
+                      theme: document.documentElement.dataset.theme,
+                      scrollWidth: document.documentElement.scrollWidth,
+                      clientWidth: document.documentElement.clientWidth,
+                      bodyText: document.body.innerText.length,
+                    }));
+                    assert.equal(state.theme, theme, `${route}: expected ${theme}, got ${state.theme}`);
+                    assert(state.bodyText > 100, `${route}: suspiciously empty body`);
+                    assert(
+                      state.scrollWidth <= state.clientWidth + 1,
+                      `${route}: document horizontal overflow ${state.scrollWidth} > ${state.clientWidth}`,
+                    );
+
+                    const auditFailures = await page.evaluate(() => {
+                      const failures = [];
+                      for (const root of document.querySelectorAll('[data-ui-audit]')) {
+                        for (const el of root.querySelectorAll('[data-ui-audit-item]')) {
+                          if (!(el instanceof HTMLElement)) continue;
+                          const style = getComputedStyle(el);
+                          const rect = el.getBoundingClientRect();
+                          if (style.display === 'none' || style.visibility === 'hidden') continue;
+                          if (rect.width < 0 || rect.height < 0) failures.push('invalid geometry');
+                        }
                       }
-                    }
-                    return failures;
-                  });
-                  assert.equal(auditFailures.length, 0, `${route}: UI audit geometry failure`);
+                      return failures;
+                    });
+                    assert.equal(auditFailures.length, 0, `${route}: UI audit geometry failure`);
 
-                  console.log(`PASS ${viewport.name} ${theme} ${route}`);
+                    console.log(`PASS ${viewport.name} ${theme} ${route}`);
+                  }
+
+                  if (viewport.width === 390) {
+                    await page.goto(`${base}/`, { waitUntil: 'domcontentloaded', timeout: 45_000 });
+                    const toggle = page.locator('[data-menu-toggle]');
+                    assert(await toggle.isVisible(), 'mobile: menu toggle not visible');
+                    await toggle.click();
+                    assert.equal(await toggle.getAttribute('aria-expanded'), 'true', 'mobile: menu did not open');
+                    assert.equal(await page.locator('[data-mobile-menu]').getAttribute('aria-hidden'), 'false', 'mobile: menu stayed aria-hidden');
+                    await page.keyboard.press('Escape');
+                    assert.equal(await toggle.getAttribute('aria-expanded'), 'false', 'mobile: Escape did not close menu');
+                    console.log(`PASS mobile interaction ${theme}`);
+                  }
+
+                  if (viewport.width === 1440) {
+                    await page.goto(`${base}/`, { waitUntil: 'domcontentloaded', timeout: 45_000 });
+                    const desktopNav = page.locator('.desktop-nav');
+                    assert(await desktopNav.isVisible(), 'desktop: desktop nav not visible');
+                    const resource = page.locator('[data-resource-menu] summary');
+                    assert(await resource.isVisible(), 'desktop: resource menu summary not visible');
+                    await resource.click();
+                    assert.equal(await page.locator('[data-resource-menu]').getAttribute('open'), '', 'desktop: resource menu did not open');
+                    console.log(`PASS desktop interaction ${theme}`);
+                  }
+
+                  await context.close();
                 }
-
-                if (viewport.width === 390) {
-                  await page.goto(`${base}/`, { waitUntil: 'domcontentloaded', timeout: 45_000 });
-                  const toggle = page.locator('[data-menu-toggle]');
-                  assert(await toggle.isVisible(), 'mobile: menu toggle not visible');
-                  await toggle.click();
-                  assert.equal(await toggle.getAttribute('aria-expanded'), 'true', 'mobile: menu did not open');
-                  assert.equal(await page.locator('[data-mobile-menu]').getAttribute('aria-hidden'), 'false', 'mobile: menu stayed aria-hidden');
-                  await page.keyboard.press('Escape');
-                  assert.equal(await toggle.getAttribute('aria-expanded'), 'false', 'mobile: Escape did not close menu');
-                  console.log(`PASS mobile interaction ${theme}`);
-                }
-
-                if (viewport.width === 1440) {
-                  await page.goto(`${base}/`, { waitUntil: 'domcontentloaded', timeout: 45_000 });
-                  const desktopNav = page.locator('.desktop-nav');
-                  assert(await desktopNav.isVisible(), 'desktop: desktop nav not visible');
-                  const resource = page.locator('[data-resource-menu] summary');
-                  assert(await resource.isVisible(), 'desktop: resource menu summary not visible');
-                  await resource.click();
-                  assert.equal(await page.locator('[data-resource-menu]').getAttribute('open'), '', 'desktop: resource menu did not open');
-                  console.log(`PASS desktop interaction ${theme}`);
-                }
-
-                await context.close();
               }
-            }
 
-            const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
-            await context.addInitScript(() => {
-              try { localStorage.setItem('atlas-theme', 'light'); } catch {}
-            });
-            const page = await context.newPage();
-            await page.goto(`${base}/`, { waitUntil: 'domcontentloaded', timeout: 45_000 });
-            const themeToggle = page.locator('[data-theme-toggle]').first();
-            assert(await themeToggle.isVisible(), 'theme toggle not visible');
-            assert.equal(await page.locator('html').getAttribute('data-theme'), 'light', 'initial light theme missing');
-            await themeToggle.click();
-            assert.equal(await page.locator('html').getAttribute('data-theme'), 'dark', 'light -> dark switch failed');
-            await themeToggle.click();
-            assert.equal(await page.locator('html').getAttribute('data-theme'), 'light', 'dark -> light switch failed');
-            console.log('PASS hydrated theme switching');
-            await context.close();
-          } finally {
-            await browser.close();
-          }
+              const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+              await context.addInitScript(() => {
+                try { localStorage.setItem('atlas-theme', 'light'); } catch {}
+              });
+              const page = await context.newPage();
+              await page.goto(`${base}/`, { waitUntil: 'domcontentloaded', timeout: 45_000 });
+              const themeToggle = page.locator('[data-theme-toggle]').first();
+              assert(await themeToggle.isVisible(), 'theme toggle not visible');
+              assert.equal(await page.locator('html').getAttribute('data-theme'), 'light', 'initial light theme missing');
+              await themeToggle.click();
+              assert.equal(await page.locator('html').getAttribute('data-theme'), 'dark', 'light -> dark switch failed');
+              await themeToggle.click();
+              assert.equal(await page.locator('html').getAttribute('data-theme'), 'light', 'dark -> light switch failed');
+              console.log('PASS hydrated theme switching');
+              await context.close();
+            } finally {
+              await browser.close();
+            }
+          })().catch((error) => {
+            console.error(error);
+            process.exitCode = 1;
+          });
           NODE
