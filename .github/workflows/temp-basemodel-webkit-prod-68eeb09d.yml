@@ -56,7 +56,7 @@ jobs:
                   const response = await page.goto(`${baseURL}${route}`, { waitUntil: 'domcontentloaded' });
                   if (!response || response.status() >= 400) throw new Error(`${viewport.name}/${theme} ${route}: HTTP ${response?.status()}`);
                   await page.waitForLoadState('networkidle');
-                  if (!(await page.locator('[data-site-header]').isVisible())) throw new Error(`${viewport.name}/${theme} ${route}: header hidden`);
+                  await page.locator('[data-site-header]').waitFor({ state: 'visible', timeout: 5000 });
                   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
                   if (overflow > 1) throw new Error(`${viewport.name}/${theme} ${route}: horizontal overflow ${overflow}px`);
                   if (route === '/' && await page.locator('.global-quick-view').count() !== 0) throw new Error('global quick-view unexpectedly mounted on home');
@@ -81,12 +81,14 @@ jobs:
               await page.getByRole('button', { name: '搜索' }).click();
               const search = page.getByRole('searchbox', { name: '搜索模型、alias、厂商、家族或论文…' });
               await search.fill('qwen3-8b');
-              await page.locator('.command-results a').first().waitFor({ state: 'visible' });
+              await page.locator('.command-results a').first().waitFor({ state: 'visible', timeout: 5000 });
               const href = await page.locator('.command-results a').first().getAttribute('href');
               if (!href || !href.includes('/models/qwen3-8b/')) throw new Error(`unexpected search result href: ${href}`);
               if (requests.length !== 1) throw new Error(`expected exactly one search index request after open, got ${requests.length}`);
               await page.keyboard.press('Escape');
-              if (await page.locator('dialog[open]').count()) throw new Error('command dialog remained open after Escape');
+              await page.locator('dialog[open]').waitFor({ state: 'detached', timeout: 5000 }).catch(async () => {
+                if (await page.locator('dialog[open]').count()) throw new Error('command dialog remained open after Escape');
+              });
               if (errors.length) throw new Error(`command search errors: ${errors.join(' | ')}`);
               await context.close();
             }
@@ -97,8 +99,9 @@ jobs:
               await page.goto(`${baseURL}/papers/agentbench/`, { waitUntil: 'networkidle' });
               const trigger = page.locator('.role-model-quick-view').first();
               await trigger.scrollIntoViewIfNeeded();
+              await trigger.waitFor({ state: 'visible', timeout: 5000 });
               await trigger.click();
-              if (!(await page.locator('.global-quick-view').isVisible())) throw new Error('paper role quick-view did not open');
+              await page.locator('.global-quick-view').waitFor({ state: 'visible', timeout: 5000 });
               await context.close();
             }
 
@@ -106,11 +109,12 @@ jobs:
               const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
               const page = await context.newPage();
               await page.goto(`${baseURL}/landscape/`, { waitUntil: 'networkidle' });
-              if (!(await page.locator('.landscape-learning-list').isVisible())) throw new Error('landscape static learning content missing');
+              await page.locator('.landscape-learning-list').waitFor({ state: 'visible', timeout: 5000 });
               const fullView = page.getByRole('button', { name: '完整视图' });
               await fullView.scrollIntoViewIfNeeded();
+              await fullView.waitFor({ state: 'visible', timeout: 5000 });
               await fullView.click();
-              if (!(await page.locator('.landscape-view-note').isVisible())) throw new Error('landscape full view did not hydrate');
+              await page.locator('.landscape-view-note').waitFor({ state: 'visible', timeout: 5000 });
               await context.close();
             }
 
