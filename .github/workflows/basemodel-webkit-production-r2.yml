@@ -65,6 +65,23 @@ jobs:
             return context;
           }
 
+          async function waitForOwnerHydrated(page, selector) {
+            await page.waitForFunction((targetSelector) => {
+              const target = document.querySelector(targetSelector);
+              const island = target?.closest('astro-island');
+              return Boolean(island && !island.hasAttribute('ssr'));
+            }, selector, { timeout: 15000 });
+          }
+
+          async function waitForComponentHydrated(page, componentName) {
+            await page.waitForFunction((needle) => {
+              const island = [...document.querySelectorAll('astro-island')].find((node) =>
+                (node.getAttribute('component-url') || '').includes(needle)
+              );
+              return Boolean(island && !island.hasAttribute('ssr'));
+            }, componentName, { timeout: 15000 });
+          }
+
           async function basicMatrix(browser) {
             let count = 0;
             for (const viewport of viewports) {
@@ -104,19 +121,21 @@ jobs:
             await page.waitForFunction(() => document.querySelector('[data-mobile-menu]')?.getAttribute('aria-hidden') === 'true');
 
             await page.goto(`${BASE}/families/`, { waitUntil: 'domcontentloaded' });
-            await page.locator('.global-quick-view').waitFor({ state: 'attached', timeout: 10000 });
             const familyTrigger = page.locator('.tree-quick-view').first();
             await familyTrigger.scrollIntoViewIfNeeded();
             await familyTrigger.waitFor({ state: 'visible' });
+            await waitForOwnerHydrated(page, '.tree-quick-view');
+            await waitForComponentHydrated(page, 'GlobalModelQuickView');
             await familyTrigger.click();
             await page.locator('.global-quick-view[open]').waitFor({ state: 'visible', timeout: 10000 });
             await page.keyboard.press('Escape');
 
             await page.goto(`${BASE}/papers/agentbench/`, { waitUntil: 'domcontentloaded' });
-            await page.locator('.global-quick-view').waitFor({ state: 'attached', timeout: 10000 });
             const paperTrigger = page.locator('.role-model-quick-view').first();
             await paperTrigger.scrollIntoViewIfNeeded();
             await paperTrigger.waitFor({ state: 'visible', timeout: 10000 });
+            await waitForOwnerHydrated(page, '.role-model-quick-view');
+            await waitForComponentHydrated(page, 'GlobalModelQuickView');
             await paperTrigger.click();
             await page.locator('.global-quick-view[open]').waitFor({ state: 'visible', timeout: 10000 });
             await page.keyboard.press('Escape');
@@ -125,6 +144,7 @@ jobs:
             await page.locator('.landscape-learning-list').waitFor({ state: 'visible' });
             const fullView = page.getByRole('button', { name: '完整视图' });
             await fullView.scrollIntoViewIfNeeded();
+            await waitForOwnerHydrated(page, 'button');
             await fullView.click();
             await page.locator('.landscape-view-note').waitFor({ state: 'visible', timeout: 10000 });
 
@@ -139,6 +159,7 @@ jobs:
             await resources.locator('.resource-menu__links a').first().waitFor({ state: 'visible' });
 
             const search = desktopPage.locator('.command-search-trigger');
+            await waitForOwnerHydrated(desktopPage, '.command-search-trigger');
             await search.click();
             await desktopPage.locator('.command-menu[open]').waitFor({ state: 'visible', timeout: 10000 });
             await desktopPage.keyboard.press('Escape');
