@@ -1,0 +1,173 @@
+name: BaseModel Production WebKit Acceptance
+
+on:
+  push:
+    branches:
+      - tmp/basemodel-webkit-production-20260821
+
+permissions:
+  contents: read
+
+jobs:
+  webkit-production:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.16.0'
+      - name: Install Playwright WebKit
+        run: |
+          mkdir -p /tmp/basemodel-webkit
+          cd /tmp/basemodel-webkit
+          npm init -y >/dev/null
+          npm install playwright@1.62.1 --no-audit --no-fund
+          npx playwright install --with-deps webkit
+      - name: Run production WebKit acceptance
+        working-directory: /tmp/basemodel-webkit
+        env:
+          BASE_URL: https://basemodel-preview.vercel.app
+        run: |
+          node <<'NODE'
+          const { webkit } = require('playwright');
+
+          async function main() {
+            const baseURL = process.env.BASE_URL;
+            const browser = await webkit.launch();
+            const pageErrors = [];
+            const consoleErrors = [];
+            const routes = [
+              '/',
+              '/en/',
+              '/models/',
+              '/en/models/',
+              '/landscape/',
+              '/en/landscape/',
+              '/research/seed-openevo/results/',
+              '/en/research/seed-openevo/results/',
+            ];
+            const viewports = [
+              { width: 390, height: 844, name: 'phone' },
+              { width: 768, height: 1024, name: 'tablet' },
+              { width: 1440, height: 1000, name: 'desktop' },
+            ];
+            const themes = ['light', 'dark'];
+            let routeChecks = 0;
+
+            try {
+              for (const viewport of viewports) {
+                for (const theme of themes) {
+                  const context = await browser.newContext({
+                    viewport: { width: viewport.width, height: viewport.height },
+                    colorScheme: theme,
+                  });
+                  const page = await context.newPage();
+                  page.on('pageerror', (error) => pageErrors.push(`${viewport.name}/${theme}: ${error.message}`));
+                  page.on('console', (message) => {
+                    if (message.type() === 'error') consoleErrors.push(`${viewport.name}/${theme}: ${message.text()}`);
+                  });
+
+                  for (const route of routes) {
+                    const response = await page.goto(`${baseURL}${route}`, { waitUntil: 'networkidle' });
+                    if (!response || !response.ok()) throw new Error(`${route} returned ${response?.status() ?? 'no response'}`);
+                    await page.locator('[data-site-header]').waitFor({ state: 'visible' });
+                    const metrics = await page.evaluate(() => ({
+                      client: document.documentElement.clientWidth,
+                      scroll: document.documentElement.scrollWidth,
+                      header: Boolean(document.querySelector('[data-site-header]')),
+                    }));
+                    if (!metrics.header) throw new Error(`${route} lost site header`);
+                    if (metrics.scroll - metrics.client > 1) throw new Error(`${route} horizontal overflow ${metrics.scroll}/${metrics.client}`);
+                    routeChecks += 1;
+                  }
+                  await context.close();
+                }
+              }
+
+              for (const theme of themes) {
+                const context = await browser.newContext({ viewport: { width: 390, height: 844 }, colorScheme: theme });
+                const page = await context.newPage();
+                await page.goto(`${baseURL}/`, { waitUntil: 'networkidle' });
+                const toggle = page.locator('[data-menu-toggle]');
+                await toggle.click();
+                if (await toggle.getAttribute('aria-expanded') !== 'true') throw new Error(`mobile menu did not open in ${theme}`);
+                await page.locator('[data-mobile-menu]').waitFor({ state: 'visible' });
+                await page.keyboard.press('Escape');
+                if (await toggle.getAttribute('aria-expanded') !== 'false') throw new Error(`mobile menu did not close in ${theme}`);
+                await context.close();
+              }
+
+              {
+                const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, colorScheme: 'light' });
+                const page = await context.newPage();
+                await page.goto(`${baseURL}/`, { waitUntil: 'networkidle' });
+                const resource = page.locator('[data-resource-menu]');
+                await resource.locator('summary').click();
+                if (!(await resource.getAttribute('open')) !== false) {
+                  // attribute presence is checked below; keep branch explicit for old WebKit DOM behavior
+                }
+                if (await resource.getAttribute('open') === null) throw new Error('resource menu did not open');
+                await page.keyboard.press('Escape');
+                if (await resource.getAttribute('open') !== null) throw new Error('resource menu did not close');
+
+                const themeToggle = page.locator('[data-theme-toggle]').first();
+                const before = await page.locator('html').getAttribute('data-theme');
+                await themeToggle.click();
+                const after = await page.locator('html').getAttribute('data-theme');
+                if (!before || !after || before === after) throw new Error(`theme did not switch: ${before} -> ${after}`);
+                await themeToggle.click();
+                const restored = await page.locator('html').getAttribute('data-theme');
+                if (restored !== before) throw new Error(`theme did not restore: ${restored} vs ${before}`);
+                await context.close();
+              }
+
+              {
+                const requests = [];
+                const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
+                await context.addInitScript(() => {
+                  localStorage.setItem('atlas-compare', JSON.stringify(['qwen3-8b', 'gpt-oss-20b']));
+                });
+                const page = await context.newPage();
+                page.on('request', (request) => {
+                  if (request.url().includes('/model-data/')) requests.push(request.url());
+                });
+                page.on('pageerror', (error) => pageErrors.push(`compare-tray: ${error.message}`));
+                page.on('console', (message) => {
+                  if (message.type() === 'error') consoleErrors.push(`compare-tray: ${message.text()}`);
+                });
+                await page.goto(`${baseURL}/`, { waitUntil: 'networkidle' });
+                const tray = page.locator('.compare-tray');
+                await tray.waitFor({ state: 'visible' });
+                const text = (await tray.textContent()) || '';
+                if (!text.includes('Qwen3-8B')) throw new Error(`CompareTray missing Qwen3-8B: ${text}`);
+                if (!text.includes('gpt-oss-20b')) throw new Error(`CompareTray missing gpt-oss-20b: ${text}`);
+                if (!requests.some((url) => url.includes('/model-data/qwen3-8b.json'))) throw new Error('CompareTray did not fetch qwen3-8b on demand');
+                if (!requests.some((url) => url.includes('/model-data/gpt-oss-20b.json'))) throw new Error('CompareTray did not fetch gpt-oss-20b on demand');
+                await context.close();
+              }
+
+              {
+                const context = await browser.newContext({ javaScriptEnabled: false, viewport: { width: 390, height: 844 } });
+                const page = await context.newPage();
+                const response = await page.goto(`${baseURL}/en/research/seed-openevo/results/`, { waitUntil: 'load' });
+                if (!response || !response.ok()) throw new Error(`no-JS results returned ${response?.status() ?? 'no response'}`);
+                await page.getByRole('heading', { name: 'One concept matters here: what is LoRA?' }).waitFor({ state: 'visible' });
+                const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+                if (overflow > 1) throw new Error(`no-JS results overflow: ${overflow}px`);
+                await context.close();
+              }
+
+              if (pageErrors.length) throw new Error(`page errors:\n${pageErrors.join('\n')}`);
+              if (consoleErrors.length) throw new Error(`console errors:\n${consoleErrors.join('\n')}`);
+              console.log(`[webkit-production] PASS: ${routeChecks} route×viewport×theme checks + mobile menu + resources + theme switch + CompareTray on-demand + no-JS results`);
+            } finally {
+              await browser.close();
+            }
+          }
+
+          main().catch((error) => {
+            console.error(error);
+            process.exit(1);
+          });
+          NODE
