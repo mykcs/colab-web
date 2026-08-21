@@ -27,7 +27,7 @@ jobs:
         working-directory: /tmp/basemodel-webkit
         env:
           BASE_URL: https://basemodel-preview-592yb1bkr-wangrui92-team.vercel.app
-          SHARE_URL: https://basemodel-preview-592yb1bkr-wangrui92-team.vercel.app/?_vercel_share=ItAPvMymzt1ON9CnjnhKTeroIm1jdOjQ
+          SHARE_TOKEN: ItAPvMymzt1ON9CnjnhKTeroIm1jdOjQ
           EXPECTED_BASEMODEL_SHA: 41e88ed41dc2cb541742a81c320cb5c55f0842b7
         run: |
           node <<'NODE'
@@ -35,7 +35,8 @@ jobs:
 
           (async () => {
             const baseURL = process.env.BASE_URL;
-            const shareURL = process.env.SHARE_URL;
+            const shareToken = process.env.SHARE_TOKEN;
+            const withShare = (path) => `${baseURL}${path}${path.includes('?') ? '&' : '?'}_vercel_share=${encodeURIComponent(shareToken)}`;
             const browser = await webkit.launch();
             const routes = [
               '/', '/en/', '/models/', '/en/models/', '/landscape/',
@@ -53,19 +54,16 @@ jobs:
             for (const viewport of viewports) {
               for (const theme of themes) {
                 const context = await browser.newContext({ viewport });
-                const authPage = await context.newPage();
-                await authPage.goto(shareURL, { waitUntil: 'domcontentloaded' });
-                await authPage.close();
                 await context.addInitScript((value) => localStorage.setItem('atlas-theme', value), theme);
                 for (const route of routes) {
                   const page = await context.newPage();
                   const errors = [];
                   page.on('pageerror', error => errors.push(error.message));
                   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
-                  const response = await page.goto(`${baseURL}${route}`, { waitUntil: 'domcontentloaded' });
+                  const response = await page.goto(withShare(route), { waitUntil: 'domcontentloaded' });
                   if (!response || response.status() >= 400) throw new Error(`${viewport.name}/${theme} ${route}: HTTP ${response?.status()}`);
                   await page.waitForLoadState('networkidle');
-                  if (!(await page.locator('[data-site-header]').isVisible())) throw new Error(`${viewport.name}/${theme} ${route}: header hidden`);
+                  if (!(await page.locator('[data-site-header]').isVisible())) throw new Error(`${viewport.name}/${theme} ${route}: header hidden at ${page.url()}`);
                   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
                   if (overflow > 1) throw new Error(`${viewport.name}/${theme} ${route}: horizontal overflow ${overflow}px`);
                   if (errors.length) throw new Error(`${viewport.name}/${theme} ${route}: ${errors.join(' | ')}`);
@@ -78,16 +76,13 @@ jobs:
 
             {
               const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
-              const authPage = await context.newPage();
-              await authPage.goto(shareURL, { waitUntil: 'domcontentloaded' });
-              await authPage.close();
               const page = await context.newPage();
               const requests = [];
               const errors = [];
               page.on('request', request => { if (request.url().includes('/search-index.json')) requests.push(request.url()); });
               page.on('pageerror', error => errors.push(error.message));
               page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
-              await page.goto(`${baseURL}/`, { waitUntil: 'networkidle' });
+              await page.goto(withShare('/'), { waitUntil: 'networkidle' });
               if (requests.length !== 0) throw new Error(`search index requested before open: ${requests.length}`);
               await page.getByRole('button', { name: '搜索' }).click();
               const search = page.getByRole('searchbox', { name: '搜索模型、alias、厂商、家族或论文…' });
