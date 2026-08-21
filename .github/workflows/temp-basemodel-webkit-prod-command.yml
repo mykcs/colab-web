@@ -1,0 +1,99 @@
+name: Temporary BaseModel Command Search WebKit Production Acceptance
+
+on:
+  push:
+    branches:
+      - temp/basemodel-webkit-prod-command-4cd4e905-20260821
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  webkit-production:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install Playwright WebKit
+        run: |
+          mkdir -p /tmp/basemodel-webkit
+          cd /tmp/basemodel-webkit
+          npm init -y
+          npm install @playwright/test@1.62.1
+          npx playwright install --with-deps webkit
+      - name: Run production acceptance
+        working-directory: /tmp/basemodel-webkit
+        env:
+          BASE_URL: https://basemodel-preview.vercel.app
+          EXPECTED_BASEMODEL_SHA: 4cd4e905de450497612fbe1de02063d6dfbd6be0
+        run: |
+          node <<'NODE'
+          const { webkit } = require('@playwright/test');
+
+          (async () => {
+            const baseURL = process.env.BASE_URL;
+            const browser = await webkit.launch();
+            const routes = ['/', '/en/', '/models/', '/en/models/', '/landscape/', '/research/seed-openevo/results/', '/en/research/seed-openevo/results/', '/guide/openevo-webshop-alfworld/'];
+            const viewports = [
+              { name: 'mobile', width: 390, height: 844 },
+              { name: 'tablet', width: 768, height: 1024 },
+              { name: 'desktop', width: 1440, height: 1000 },
+            ];
+            const themes = ['light', 'dark'];
+            let checks = 0;
+
+            for (const viewport of viewports) {
+              for (const theme of themes) {
+                const context = await browser.newContext({ viewport });
+                await context.addInitScript((value) => localStorage.setItem('atlas-theme', value), theme);
+                for (const route of routes) {
+                  const page = await context.newPage();
+                  const errors = [];
+                  page.on('pageerror', error => errors.push(error.message));
+                  page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+                  const response = await page.goto(`${baseURL}${route}`, { waitUntil: 'domcontentloaded' });
+                  if (!response || response.status() >= 400) throw new Error(`${viewport.name}/${theme} ${route}: HTTP ${response?.status()}`);
+                  await page.waitForLoadState('networkidle');
+                  if (!(await page.locator('[data-site-header]').isVisible())) throw new Error(`${viewport.name}/${theme} ${route}: header hidden`);
+                  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+                  if (overflow > 1) throw new Error(`${viewport.name}/${theme} ${route}: horizontal overflow ${overflow}px`);
+                  if (errors.length) throw new Error(`${viewport.name}/${theme} ${route}: ${errors.join(' | ')}`);
+                  checks += 1;
+                  await page.close();
+                }
+                await context.close();
+              }
+            }
+
+            {
+              const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+              const page = await context.newPage();
+              const requests = [];
+              const errors = [];
+              page.on('request', request => { if (request.url().includes('/search-index.json')) requests.push(request.url()); });
+              page.on('pageerror', error => errors.push(error.message));
+              page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+              await page.goto(`${baseURL}/`, { waitUntil: 'networkidle' });
+              if (requests.length !== 0) throw new Error(`search index requested before open: ${requests.length}`);
+              await page.getByRole('button', { name: '搜索' }).click();
+              const search = page.getByRole('searchbox', { name: '搜索模型、alias、厂商、家族或论文…' });
+              await search.fill('qwen3-8b');
+              await page.locator('.command-results a').first().waitFor({ state: 'visible' });
+              const href = await page.locator('.command-results a').first().getAttribute('href');
+              if (!href || !href.includes('/models/qwen3-8b/')) throw new Error(`unexpected search result href: ${href}`);
+              if (requests.length !== 1) throw new Error(`expected exactly one search index request after open, got ${requests.length}`);
+              await page.keyboard.press('Escape');
+              if (await page.locator('dialog[open]').count()) throw new Error('command dialog remained open after Escape');
+              if (errors.length) throw new Error(`command search errors: ${errors.join(' | ')}`);
+              await context.close();
+            }
+
+            console.log(`WEBKIT_COMMAND_SEARCH_PASS checks=${checks} sha=${process.env.EXPECTED_BASEMODEL_SHA}`);
+            await browser.close();
+          })().catch(error => {
+            console.error(error);
+            process.exit(1);
+          });
+          NODE
