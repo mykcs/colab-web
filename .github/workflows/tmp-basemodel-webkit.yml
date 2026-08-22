@@ -17,7 +17,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
-      BASE_URL: https://basemodel-preview-zwlxboqd7-wangrui92-team.vercel.app
+      # Vercel API resolves this Production alias to deployment dpl_2RUTesdAVgeQCJrnDDUNY6iojEnN,
+      # whose githubCommitSha is the EXPECTED_SHA below. Use the public alias so
+      # the validation runner does not need a protected-deployment bypass token.
+      BASE_URL: https://basemodel-preview.vercel.app
       EXPECTED_SHA: c5ff99be91d497669ce89291521bf6239b136d26
     steps:
       - uses: actions/setup-node@v4
@@ -67,7 +70,7 @@ jobs:
                 for (const path of routes) {
                   const response = await page.goto(base + path, { waitUntil: 'domcontentloaded', timeout: 45000 });
                   assert(response && response.status() < 400, `${name} ${path}: HTTP ${response?.status()}`);
-                  assert(new URL(page.url()).host === host, `${name} ${path}: redirected outside exact deployment to ${page.url()}`);
+                  assert(new URL(page.url()).host === host, `${name} ${path}: redirected outside production alias to ${page.url()}`);
                   await page.evaluate(async () => { if (document.fonts) await document.fonts.ready; });
                   const result = await page.evaluate(() => {
                     const html = document.documentElement;
