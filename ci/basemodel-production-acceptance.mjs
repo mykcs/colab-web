@@ -13,7 +13,6 @@ const routes = [
   '/research/seed-openevo/results/',
   '/en/research/seed-openevo/results/',
   '/research/seed-openevo/results/webshop-training/',
-  '/en/research/seed-openevo/results/webshop-training/',
   '/guide/openevo-webshop-alfworld/',
   '/en/guide/openevo-webshop-alfworld/',
 ];
