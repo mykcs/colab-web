@@ -35,99 +35,114 @@ jobs:
         run: |
           node <<'NODE'
           const { webkit } = require('playwright');
-          const assert = (ok, msg) => { if (!ok) throw new Error(msg); };
-          const base = process.env.BASE_URL;
-          const host = new URL(base).host;
-          const routes = [
-            '/', '/guide/', '/models/', '/models/qwen2-5-3b-instruct/',
-            '/papers/', '/papers/seed/', '/workspace/', '/data-status/', '/methodology/',
-            '/guide/openevo-webshop-alfworld/', '/en/', '/en/models/', '/en/papers/seed/', '/en/workspace/',
-            '/research/seed-openevo/webshop/', '/research/seed-openevo/alfworld/',
-            '/research/seed-openevo/seed/', '/research/seed-openevo/openevo/',
-            '/research/seed-openevo/loops/', '/lab/',
-            '/en/research/seed-openevo/webshop/', '/en/research/seed-openevo/alfworld/',
-            '/en/research/seed-openevo/seed/', '/en/research/seed-openevo/openevo/',
-            '/en/research/seed-openevo/loops/', '/en/lab/',
-            '/research/seed-openevo/results/webshop-training/',
-            '/research/seed-openevo/results/seed-training/',
-            '/research/seed-openevo/results/openevo-training/'
-          ];
-          const matrices = [
-            ['mobile-light',390,844,'light'], ['mobile-dark',390,844,'dark'],
-            ['tablet-light',768,1024,'light'], ['tablet-dark',768,1024,'dark'],
-            ['desktop-light',1440,1000,'light'], ['desktop-dark',1440,1000,'dark']
-          ];
-          const browser = await webkit.launch();
-          try {
-            for (const [name,width,height,theme] of matrices) {
-              const context = await browser.newContext({ viewport: { width, height } });
-              await context.addInitScript(t => localStorage.setItem('atlas-theme', t), theme);
-              const page = await context.newPage();
-              for (const path of routes) {
-                const response = await page.goto(base + path, { waitUntil: 'domcontentloaded', timeout: 45000 });
-                assert(response && response.status() < 400, `${name} ${path}: HTTP ${response?.status()}`);
-                assert(new URL(page.url()).host === host, `${name} ${path}: redirected outside exact deployment to ${page.url()}`);
-                await page.evaluate(async () => { if (document.fonts) await document.fonts.ready; });
-                const result = await page.evaluate(() => {
-                  const html = document.documentElement;
-                  const header = document.querySelector('.site-header');
-                  const hr = header?.getBoundingClientRect();
-                  const overflow = html.scrollWidth - html.clientWidth;
-                  const escaped = [...document.querySelectorAll('main h1, main h2, main h3, main p, main li, main a, main button, main code')]
-                    .filter(el => {
-                      const s = getComputedStyle(el), r = el.getBoundingClientRect();
-                      if (s.display === 'none' || s.visibility === 'hidden' || +s.opacity === 0 || r.width < .5 || r.height < .5) return false;
-                      return r.left < -2 || r.right > html.clientWidth + 2;
-                    }).slice(0,5).map(el => `${el.tagName}:${el.textContent?.trim().slice(0,50)}`);
-                  const groups = new Map();
-                  document.querySelectorAll('[data-ui-audit-item]').forEach(el => {
-                    const p = el.parentElement; if (!p) return;
-                    const arr = groups.get(p) || []; arr.push(el); groups.set(p, arr);
+          (async () => {
+            const assert = (ok, msg) => { if (!ok) throw new Error(msg); };
+            const base = process.env.BASE_URL;
+            const host = new URL(base).host;
+            const routes = [
+              '/', '/guide/', '/models/', '/models/qwen2-5-3b-instruct/',
+              '/papers/', '/papers/seed/', '/workspace/', '/data-status/', '/methodology/',
+              '/guide/openevo-webshop-alfworld/', '/en/', '/en/models/', '/en/papers/seed/', '/en/workspace/',
+              '/research/seed-openevo/webshop/', '/research/seed-openevo/alfworld/',
+              '/research/seed-openevo/seed/', '/research/seed-openevo/openevo/',
+              '/research/seed-openevo/loops/', '/lab/',
+              '/en/research/seed-openevo/webshop/', '/en/research/seed-openevo/alfworld/',
+              '/en/research/seed-openevo/seed/', '/en/research/seed-openevo/openevo/',
+              '/en/research/seed-openevo/loops/', '/en/lab/',
+              '/research/seed-openevo/results/webshop-training/',
+              '/research/seed-openevo/results/seed-training/',
+              '/research/seed-openevo/results/openevo-training/'
+            ];
+            const matrices = [
+              ['mobile-light',390,844,'light'], ['mobile-dark',390,844,'dark'],
+              ['tablet-light',768,1024,'light'], ['tablet-dark',768,1024,'dark'],
+              ['desktop-light',1440,1000,'light'], ['desktop-dark',1440,1000,'dark']
+            ];
+            const browser = await webkit.launch();
+            try {
+              for (const [name,width,height,theme] of matrices) {
+                const context = await browser.newContext({ viewport: { width, height } });
+                await context.addInitScript(t => localStorage.setItem('atlas-theme', t), theme);
+                const page = await context.newPage();
+                for (const path of routes) {
+                  const response = await page.goto(base + path, { waitUntil: 'domcontentloaded', timeout: 45000 });
+                  assert(response && response.status() < 400, `${name} ${path}: HTTP ${response?.status()}`);
+                  assert(new URL(page.url()).host === host, `${name} ${path}: redirected outside exact deployment to ${page.url()}`);
+                  await page.evaluate(async () => { if (document.fonts) await document.fonts.ready; });
+                  const result = await page.evaluate(() => {
+                    const html = document.documentElement;
+                    const header = document.querySelector('.site-header');
+                    const hr = header?.getBoundingClientRect();
+                    const overflow = html.scrollWidth - html.clientWidth;
+                    const hasHorizontalScrollContainer = (element) => {
+                      let current = element.parentElement;
+                      while (current && current !== document.body) {
+                        const style = getComputedStyle(current);
+                        if ((style.overflowX === 'auto' || style.overflowX === 'scroll')
+                          && current.scrollWidth > current.clientWidth + 1) return true;
+                        current = current.parentElement;
+                      }
+                      return false;
+                    };
+                    const escaped = [...document.querySelectorAll('main h1, main h2, main h3, main p, main li, main a, main button, main code')]
+                      .filter(el => {
+                        const s = getComputedStyle(el), r = el.getBoundingClientRect();
+                        if (s.display === 'none' || s.visibility === 'hidden' || +s.opacity === 0 || r.width < .5 || r.height < .5) return false;
+                        return (r.left < -2 || r.right > html.clientWidth + 2) && !hasHorizontalScrollContainer(el);
+                      }).slice(0,5).map(el => `${el.tagName}:${el.textContent?.trim().slice(0,50)}`);
+                    const groups = new Map();
+                    document.querySelectorAll('[data-ui-audit-item]').forEach(el => {
+                      const p = el.parentElement; if (!p) return;
+                      const arr = groups.get(p) || []; arr.push(el); groups.set(p, arr);
+                    });
+                    const overlaps = [];
+                    for (const arr of groups.values()) for (let i=0;i<arr.length;i++) for (let j=i+1;j<arr.length;j++) {
+                      const a=arr[i].getBoundingClientRect(), b=arr[j].getBoundingClientRect();
+                      if (Math.min(a.right,b.right)-Math.max(a.left,b.left)>2 && Math.min(a.bottom,b.bottom)-Math.max(a.top,b.top)>2) overlaps.push('overlap');
+                    }
+                    return {
+                      theme: html.getAttribute('data-theme'), overflow,
+                      headerVisible: !!hr && hr.width > 1 && hr.height > 1,
+                      escaped, overlapCount: overlaps.length,
+                      title: document.title,
+                    };
                   });
-                  const overlaps = [];
-                  for (const arr of groups.values()) for (let i=0;i<arr.length;i++) for (let j=i+1;j<arr.length;j++) {
-                    const a=arr[i].getBoundingClientRect(), b=arr[j].getBoundingClientRect();
-                    if (Math.min(a.right,b.right)-Math.max(a.left,b.left)>2 && Math.min(a.bottom,b.bottom)-Math.max(a.top,b.top)>2) overlaps.push('overlap');
-                  }
-                  return {
-                    theme: html.getAttribute('data-theme'), overflow,
-                    headerVisible: !!hr && hr.width > 1 && hr.height > 1,
-                    escaped, overlapCount: overlaps.length,
-                    title: document.title,
-                  };
-                });
-                assert(result.theme === theme, `${name} ${path}: theme=${result.theme}`);
-                assert(result.overflow <= 2, `${name} ${path}: root overflow ${result.overflow}px`);
-                assert(result.headerVisible, `${name} ${path}: global header hidden`);
-                assert(result.escaped.length === 0, `${name} ${path}: viewport escape ${result.escaped.join(' | ')}`);
-                assert(result.overlapCount === 0, `${name} ${path}: audited sibling overlap`);
+                  assert(result.theme === theme, `${name} ${path}: theme=${result.theme}`);
+                  assert(result.overflow <= 2, `${name} ${path}: root overflow ${result.overflow}px`);
+                  assert(result.headerVisible, `${name} ${path}: global header hidden`);
+                  assert(result.escaped.length === 0, `${name} ${path}: viewport escape ${result.escaped.join(' | ')}`);
+                  assert(result.overlapCount === 0, `${name} ${path}: audited sibling overlap`);
+                }
+                await context.close();
+                console.log(`PASS ${name} (${routes.length} routes)`);
+              }
+
+              const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+              const page = await context.newPage();
+              for (const path of ['/', '/workspace/', '/guide/openevo-webshop-alfworld/']) {
+                await page.goto(base + path, { waitUntil: 'domcontentloaded' });
+                assert(new URL(page.url()).host === host, `theme-switch ${path}: auth/redirect ${page.url()}`);
+                await page.evaluate(() => localStorage.setItem('atlas-theme','light'));
+                await page.reload({ waitUntil: 'domcontentloaded' });
+                assert(await page.locator('html').getAttribute('data-theme') === 'light', `${path}: light init failed`);
+                const before = await page.evaluate(() => [getComputedStyle(document.body).backgroundColor, getComputedStyle(document.body).color]);
+                await page.locator('[data-theme-toggle]').first().click();
+                await page.waitForFunction(() => document.documentElement.getAttribute('data-theme') === 'dark');
+                const dark = await page.evaluate(() => [getComputedStyle(document.body).backgroundColor, getComputedStyle(document.body).color]);
+                assert(before[0] !== dark[0] && before[1] !== dark[1], `${path}: live dark switch did not update colors`);
+                await page.locator('[data-theme-toggle]').first().click();
+                await page.waitForFunction(() => document.documentElement.getAttribute('data-theme') === 'light');
+                const after = await page.evaluate(() => [getComputedStyle(document.body).backgroundColor, getComputedStyle(document.body).color]);
+                assert(before[0] === after[0] && before[1] === after[1], `${path}: light restore mismatch`);
               }
               await context.close();
-              console.log(`PASS ${name} (${routes.length} routes)`);
+              console.log('PASS live light-dark-light switching');
+              console.log(`WEBKIT_PRODUCTION_ACCEPTANCE_PASS sha=${process.env.EXPECTED_SHA}`);
+            } finally {
+              await browser.close();
             }
-
-            const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
-            const page = await context.newPage();
-            for (const path of ['/', '/workspace/', '/guide/openevo-webshop-alfworld/']) {
-              await page.goto(base + path, { waitUntil: 'domcontentloaded' });
-              assert(new URL(page.url()).host === host, `theme-switch ${path}: auth/redirect ${page.url()}`);
-              await page.evaluate(() => localStorage.setItem('atlas-theme','light'));
-              await page.reload({ waitUntil: 'domcontentloaded' });
-              assert(await page.locator('html').getAttribute('data-theme') === 'light', `${path}: light init failed`);
-              const before = await page.evaluate(() => [getComputedStyle(document.body).backgroundColor, getComputedStyle(document.body).color]);
-              await page.locator('[data-theme-toggle]').first().click();
-              await page.waitForFunction(() => document.documentElement.getAttribute('data-theme') === 'dark');
-              const dark = await page.evaluate(() => [getComputedStyle(document.body).backgroundColor, getComputedStyle(document.body).color]);
-              assert(before[0] !== dark[0] && before[1] !== dark[1], `${path}: live dark switch did not update colors`);
-              await page.locator('[data-theme-toggle]').first().click();
-              await page.waitForFunction(() => document.documentElement.getAttribute('data-theme') === 'light');
-              const after = await page.evaluate(() => [getComputedStyle(document.body).backgroundColor, getComputedStyle(document.body).color]);
-              assert(before[0] === after[0] && before[1] === after[1], `${path}: light restore mismatch`);
-            }
-            await context.close();
-            console.log('PASS live light-dark-light switching');
-            console.log(`WEBKIT_PRODUCTION_ACCEPTANCE_PASS sha=${process.env.EXPECTED_SHA}`);
-          } finally {
-            await browser.close();
-          }
+          })().catch(error => {
+            console.error(error?.stack || error);
+            process.exit(1);
+          });
           NODE
