@@ -44,7 +44,7 @@ jobs:
   lighthouse:
     name: Lighthouse production lab baseline
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - name: Checkout harness
         uses: actions/checkout@v4
@@ -54,6 +54,8 @@ jobs:
           node-version: '22'
       - name: Install Lighthouse
         run: npm install --no-save lighthouse@13.4.1
+      - name: Verify Speed Insights collector is live
+        run: curl -fsS "$BASEMODEL_URL/_vercel/speed-insights/script.js" -o /dev/null
       - name: Run Lighthouse mobile and desktop
         run: |
           mkdir -p lighthouse-results
@@ -76,11 +78,31 @@ jobs:
             --output-path=lighthouse-results/results-mobile.json \
             --chrome-flags='--headless --no-sandbox --disable-gpu' \
             --quiet
-      - name: Print performance summary
+          npx lighthouse "$BASEMODEL_URL/research/seed-openevo/results/" \
+            --preset=desktop \
+            --only-categories=performance \
+            --output=json \
+            --output-path=lighthouse-results/results-desktop.json \
+            --chrome-flags='--headless --no-sandbox --disable-gpu' \
+            --quiet
+      - name: Print summary and enforce regression budgets
         run: |
           node <<'NODE'
           const fs = require('fs');
-          for (const file of ['home-mobile.json', 'home-desktop.json', 'results-mobile.json']) {
+          const files = [
+            'home-mobile.json',
+            'home-desktop.json',
+            'results-mobile.json',
+            'results-desktop.json',
+          ];
+          const limits = {
+            scoreMin: 90,
+            lcpMaxMs: 3000,
+            tbtMaxMs: 300,
+            clsMax: 0.1,
+          };
+          const failures = [];
+          for (const file of files) {
             const r = JSON.parse(fs.readFileSync(`lighthouse-results/${file}`, 'utf8'));
             const a = r.audits;
             const summary = {
@@ -93,9 +115,20 @@ jobs:
               speed_index_ms: Math.round(a['speed-index'].numericValue),
             };
             console.log('LIGHTHOUSE_SUMMARY', JSON.stringify(summary));
+            if (summary.score < limits.scoreMin) failures.push(`${file}: score ${summary.score} < ${limits.scoreMin}`);
+            if (summary.lcp_ms > limits.lcpMaxMs) failures.push(`${file}: LCP ${summary.lcp_ms}ms > ${limits.lcpMaxMs}ms`);
+            if (summary.tbt_ms > limits.tbtMaxMs) failures.push(`${file}: TBT ${summary.tbt_ms}ms > ${limits.tbtMaxMs}ms`);
+            if (summary.cls > limits.clsMax) failures.push(`${file}: CLS ${summary.cls} > ${limits.clsMax}`);
           }
+          if (failures.length) {
+            console.error('LIGHTHOUSE_BUDGET_FAILURES');
+            for (const failure of failures) console.error(`- ${failure}`);
+            process.exit(1);
+          }
+          console.log('LIGHTHOUSE_BUDGETS_PASS', JSON.stringify(limits));
           NODE
       - name: Upload Lighthouse JSON
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: basemodel-lighthouse
