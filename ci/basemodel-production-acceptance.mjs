@@ -10,11 +10,12 @@ const routes = [
   '/en/papers/agentbench/',
   '/landscape/',
   '/en/landscape/',
+  // Keep one declared legacy Results redirect, but do not require unknown archived-English URLs to return 200.
   '/research/seed-openevo/results/',
-  '/en/research/seed-openevo/results/',
-  '/research/seed-openevo/results/webshop-training/',
+  // BaseModel keeps these Chinese-only compatibility/canonical routes as active production contracts.
+  '/research/seed-openevo/study/results/webshop-training/',
+  '/research/seed-openevo/study/run/',
   '/guide/openevo-webshop-alfworld/',
-  '/en/guide/openevo-webshop-alfworld/',
 ];
 const viewports = [
   { width: 390, height: 844, name: 'mobile' },
