@@ -59,7 +59,7 @@ The workflow also verifies that `/_vercel/speed-insights/script.js` is reachable
 
 - Keep browser/tool versions pinned and update them deliberately.
 - Keep the route matrix representative rather than exhaustive.
-- Wait for Astro island hydration signals before testing `client:idle` or `client:visible` interactions; SSR-visible markup alone does not mean event handlers are ready.
+- Wait for Astro island hydration signals before testing `client:idle` or `client:visible` interactions; SSR-visible markup alone does not mean event handlers are ready. Static controls such as the inline-script search dialog have no island owner: after `DOMContentLoaded`, click the control and assert the dialog opens and Escape closes it. Requiring an island for these controls causes a harness timeout even when the product interaction works.
 - Do not put BaseModel private source, credentials, protected Preview share URLs, or repository secrets here.
 - Lighthouse JSON artifacts are retained for 14 days; lab numbers are useful for regression direction, not a substitute for field Core Web Vitals.
 - If a budget proves noisy, diagnose the lab variance before relaxing it; do not turn a real regression into a warning just to keep the monitor green.

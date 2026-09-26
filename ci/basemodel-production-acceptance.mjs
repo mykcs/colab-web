@@ -10,11 +10,12 @@ const routes = [
   '/en/papers/agentbench/',
   '/landscape/',
   '/en/landscape/',
+  // Keep one declared legacy Results redirect, but do not require unknown archived-English URLs to return 200.
   '/research/seed-openevo/results/',
-  '/en/research/seed-openevo/results/',
-  '/research/seed-openevo/results/webshop-training/',
+  // BaseModel keeps these Chinese-only compatibility/canonical routes as active production contracts.
+  '/research/seed-openevo/study/results/webshop-training/',
+  '/research/seed-openevo/study/run/',
   '/guide/openevo-webshop-alfworld/',
-  '/en/guide/openevo-webshop-alfworld/',
 ];
 const viewports = [
   { width: 390, height: 844, name: 'mobile' },
@@ -129,10 +130,12 @@ async function focusedInteractions(browser) {
   await resources.locator('.resource-menu__links a').first().waitFor({ state: 'visible' });
 
   const search = desktopPage.locator('.command-search-trigger');
-  await waitForOwnerHydrated(desktopPage, '.command-search-trigger');
+  // Search is a static control wired by an inline script before DOMContentLoaded.
+  // Only actual Astro islands have hydration state; assert the visible behavior.
   await search.click();
   await desktopPage.locator('.command-menu[open]').waitFor({ state: 'visible', timeout: 10000 });
   await desktopPage.keyboard.press('Escape');
+  await desktopPage.locator('.command-menu[open]').waitFor({ state: 'hidden', timeout: 10000 });
 
   const before = await desktopPage.locator('html').getAttribute('data-theme');
   await desktopPage.locator('[data-theme-toggle]').click();
