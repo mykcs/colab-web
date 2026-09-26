@@ -130,10 +130,12 @@ async function focusedInteractions(browser) {
   await resources.locator('.resource-menu__links a').first().waitFor({ state: 'visible' });
 
   const search = desktopPage.locator('.command-search-trigger');
-  await waitForOwnerHydrated(desktopPage, '.command-search-trigger');
+  // Search is a static control wired by an inline script before DOMContentLoaded.
+  // Only actual Astro islands have hydration state; assert the visible behavior.
   await search.click();
   await desktopPage.locator('.command-menu[open]').waitFor({ state: 'visible', timeout: 10000 });
   await desktopPage.keyboard.press('Escape');
+  await desktopPage.locator('.command-menu[open]').waitFor({ state: 'hidden', timeout: 10000 });
 
   const before = await desktopPage.locator('html').getAttribute('data-theme');
   await desktopPage.locator('[data-theme-toggle]').click();
