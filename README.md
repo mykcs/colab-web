@@ -1,5 +1,7 @@
 # colab-web
 
+> **Archived 2026-09-28.** See [ARCHIVED.md](ARCHIVED.md) for the retirement reason and current ownership boundary.
+
 Historical Colab / interactive-web experiments.
 
 Original references:
